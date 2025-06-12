@@ -63,35 +63,48 @@ exprs = build_typed_expressions(
     evaluator.backend,
     array_type=MtlVector,number_type=Float32
 )
+x = MtlMatrix{Float32}([3.0f0 8.0f0; 2.0f0 -1.0f0])'
+σ = Metal.rand(2)
+μ = Metal.rand(2, 2)
+
+xcpu_1 = [3.0, 8.0]
+xcpu_2 = [2.0, -1.0]
+σcpu = Vector{Float64}(σ)
+σcpu_1 = σcpu[1]
+σcpu_2 = σcpu[2]
+μcpu = Matrix{Float64}(μ)
+μcpu_1 = μcpu[:, 1]
+μcpu_2 = μcpu[:, 2]
 vals = evaluate_expressions_batch(
     exprs,
-    MtlMatrix{Float32}([3.0f0 8.0f0; 2.0f0 -1.0f0])',
-    Metal.ones(2), Metal.ones(2, 2),
+    x,
+    σ,
+    μ,
     backend=MetalBackend()
 )
 
-og = zeros(2); MOI.eval_objective_gradient(evaluator, og, [3.0, 8.0])
+og = zeros(2); MOI.eval_objective_gradient(evaluator, og, xcpu_1)
 @assert all(isapprox.(convert(Vector{Float32},vals.objective_gradient[:, 1]),convert(Vector{Float32},og)))
 
-og = zeros(2); MOI.eval_objective_gradient(evaluator, og, [2.0, -1.0])
+og = zeros(2); MOI.eval_objective_gradient(evaluator, og, xcpu_2)
 @assert all(isapprox.(convert(Vector{Float32},vals.objective_gradient[:, 2]),convert(Vector{Float32},og)))
 
-cg = zeros(length(evaluator.backend.constraints)); MOI.eval_constraint(evaluator, cg, [3.0, 8.0])
+cg = zeros(length(evaluator.backend.constraints)); MOI.eval_constraint(evaluator, cg, xcpu_1)
 @assert all(isapprox.(convert(Vector{Float32},vals.constraints[:, 1]),convert(Vector{Float32},cg)))
 
-cg = zeros(length(evaluator.backend.constraints)); MOI.eval_constraint(evaluator, cg, [2.0, -1.0])
+cg = zeros(length(evaluator.backend.constraints)); MOI.eval_constraint(evaluator, cg, xcpu_2)
 @assert all(isapprox.(convert(Vector{Float32},vals.constraints[:, 2]),convert(Vector{Float32},cg)))
 
-J = zeros(length(MOI.jacobian_structure(evaluator))); MOI.eval_constraint_jacobian(evaluator, J, [3.0, 8.0])
+J = zeros(length(MOI.jacobian_structure(evaluator))); MOI.eval_constraint_jacobian(evaluator, J, xcpu_1)
 @assert all(isapprox.(convert(Vector{Float32},vals.constraint_jacobian[:, 1]),convert(Vector{Float32},J)))
 
-J = zeros(length(MOI.jacobian_structure(evaluator))); MOI.eval_constraint_jacobian(evaluator, J, [2.0, -1.0])
+J = zeros(length(MOI.jacobian_structure(evaluator))); MOI.eval_constraint_jacobian(evaluator, J, xcpu_2)
 @assert all(isapprox.(convert(Vector{Float32},vals.constraint_jacobian[:, 2]),convert(Vector{Float32},J)))
 
-H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian_lagrangian(evaluator, H, [3.0, 8.0], 1.0, ones(length(evaluator.backend.constraints)))
+H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian_lagrangian(evaluator, H, xcpu_1, σcpu_1, μcpu_1)
 @assert all(isapprox.(convert(Vector{Float32},vals.hessian_lagrangian[:, 1]),convert(Vector{Float32},H)))
 
-H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian_lagrangian(evaluator, H, [2.0, -1.0], 1.0, ones(length(evaluator.backend.constraints)))
+H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian_lagrangian(evaluator, H, xcpu_2, σcpu_2, μcpu_2)
 @assert all(isapprox.(convert(Vector{Float32},vals.hessian_lagrangian[:, 2]),convert(Vector{Float32},H)))
 
 @info "Metal pass"
@@ -107,15 +120,8 @@ batch_size = 640
 
 # Generate random batch data
 x_batch = rand(Float64, 2, batch_size)
-σ_batch = ones(Float64, batch_size)
-μ_batch = ones(Float64, length(evaluator.backend.constraints), batch_size)
-
-# Build expressions for timing
-timing_exprs = build_typed_expressions(
-    evaluator.backend,
-    array_type=Vector,
-    number_type=Float64
-)
+σ_batch = rand(Float64, batch_size)
+μ_batch = rand(Float64, length(evaluator.backend.constraints), batch_size)
 
 # CPU timing
 @info "CPU timing..."
@@ -180,35 +186,6 @@ bm = @benchmark begin
     ); KernelAbstractions.synchronize(backend)
 end samples=100 
 
-
-@info "MOI timing (for loop)..."
-# Warm up
-for i in 1:10
-    for j in 1:batch_size
-        x_point = x_batch[:, j]
-        σ_point = σ_batch[j]
-        μ_point = μ_batch[:, j]
-        
-        # Evaluate objective
-        obj_val = MOI.eval_objective(evaluator, x_point)
-        
-        # Evaluate objective gradient
-        grad = zeros(length(x_point))
-        MOI.eval_objective_gradient(evaluator, grad, x_point)
-        
-        # Evaluate constraints
-        constraints = zeros(2)
-        MOI.eval_constraint(evaluator, constraints, x_point)
-        
-        # Evaluate jacobian
-        jacobian_vals = zeros(length(evaluator.nlp_model.jacobian_structure))
-        MOI.eval_constraint_jacobian(evaluator, jacobian_vals, x_point)
-        
-        # Evaluate hessian
-        hessian_vals = zeros(length(evaluator.nlp_model.hessian_lagrangian_structure))
-        MOI.eval_hessian_lagrangian(evaluator, hessian_vals, x_point, σ_point, μ_point)
-    end
-end
 grad = zeros(2, 1, batch_size)
 bmoi = @benchmark begin
     for j in 1:batch_size

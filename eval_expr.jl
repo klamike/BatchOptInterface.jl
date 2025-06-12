@@ -138,12 +138,8 @@ function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p_batch, numbe
 
         if KA.isgpu(backend)
             kernel_expr = _wrap_expr_for_kernel(remapped_expr, gensym("_expr_kernel"))
-            
-            # Get the module to eval in
-            eval_module = expr isa CachingExpr ? expr.kernel_module : KernelEvaluationModule
-
             # make kernel (compilation seems to be lazy)
-            expr.fn = Base.eval(eval_module, kernel_expr)
+            expr.fn = Base.eval(KernelEvaluationModule, kernel_expr)
             expr.fn_set = true
 
             expr.fn
