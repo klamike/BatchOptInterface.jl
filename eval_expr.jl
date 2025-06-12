@@ -3,8 +3,14 @@ import MathOptInterface.Nonlinear.SymbolicAD as SymbolicAD
 
 using RuntimeGeneratedFunctions
 RuntimeGeneratedFunctions.init(@__MODULE__)
+
 using KernelAbstractions
 const KA = KernelAbstractions
+
+using DynamicExpressions
+const DE = DynamicExpressions
+
+
 
 include("dag_to_expr.jl")
 include("evaluator_to_expr.jl")
@@ -13,6 +19,20 @@ include("evaluator_to_expr.jl")
 module KernelEvaluationModule
     using KernelAbstractions
 end
+
+_DE_OPERATORS = OperatorEnum(
+    ( +, -, *, ^, /, ifelse, atan, min, max ), # binary operators
+    ( +, -, abs, sign,
+        sqrt, cbrt,
+        abs2, inv,
+        log, log10, log2, log1p,
+        exp, exp2, expm1,
+        sin, cos, tan,
+        sec, csc, cot,
+        sind, cosd, tand, secd, cscd, cotd,
+        asin, acos, atan, asec,
+    ) # unary operators
+)
 
 mutable struct CachingExpr
     expr::Expr
@@ -126,7 +146,7 @@ Evaluate expression over batch with variable remapping.
 !!! warning
     Uses `eval` and `invokelatest` in the GPU case.
 """
-function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p_batch, number_type, backend)
+function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p::AbstractVector, number_type, backend)
     if isnothing(expr)
         # fill!(output, zero(eltype(x_batch)))
         return
@@ -145,9 +165,12 @@ function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p_batch, numbe
             expr.fn
         else
             @assert expr isa CachingExpr
-            wrapped_expr = _wrap_expr_for_evaluation(remapped_expr)
-            temp_func = @RuntimeGeneratedFunction(wrapped_expr)
-            expr.fn = temp_func
+            # wrapped_expr = _wrap_expr_for_evaluation(remapped_expr)
+            # temp_func = @RuntimeGeneratedFunction(wrapped_expr)
+            named_expr = _convert_index_to_name(remapped_expr)
+            final_expr = _interpolate_parameters(named_expr, p)
+            expr.fn = DE.combine_operators(DE.parse_expression(final_expr;
+                operators=_DE_OPERATORS, variable_names=_variable_names(x_batch, p)))
             expr.fn_set = true
 
             expr.fn
@@ -159,13 +182,13 @@ function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p_batch, numbe
         try
             # TODO: all this invokelatest/module stuff is a mess
             kernel_instance = Base.invokelatest(func, backend, 64)
-            Base.invokelatest(kernel_instance, output, x_batch, p_batch, ndrange=size(x_batch, 2))
+            Base.invokelatest(kernel_instance, output, x_batch, p, ndrange=size(x_batch, 2))
         finally
             
         end
     else
         @assert expr isa CachingExpr
-        output .= func.(eachcol(x_batch), Ref(p_batch))
+        output .= func(x_batch)
     end
 end
 
@@ -180,6 +203,26 @@ end
 function _wrap_expr_for_evaluation(expr::Expr)
     return :((x,p)->$expr)
 end
+
+function _variable_names(x_batch::AbstractMatrix, p::AbstractVector)
+    x = ["x$i" for i in 1:size(x_batch, 1)]
+    p = ["p$i" for i in 1:length(p)]
+    return [x; p]
+end
+
+# convert x[1] to x1
+function _convert_index_to_name(expr::Expr)
+    if expr.head == :ref && length(expr.args) == 2
+        var_name = expr.args[1]
+        index = expr.args[2]
+        if isa(var_name, Symbol) && isa(index, Integer)
+            return Symbol(string(var_name) * string(index))
+        end
+    end
+    new_args = [_convert_index_to_name(arg) for arg in expr.args]
+    return Expr(expr.head, new_args...)
+end
+_convert_index_to_name(expr) = expr
 
 function _convert_constants(expr::CachingExpr, number_type)
     return _convert_constants(expr.expr, number_type)
@@ -293,3 +336,26 @@ function _apply_hessian_scaling_batch!(
         constraint_offset += constraint_hess_count
     end
 end
+
+function _interpolate_parameters(expr::Expr, p::AbstractVector)
+    new_args = [_interpolate_parameters(arg, p) for arg in expr.args]
+    return Expr(expr.head, new_args...)
+end
+
+function _interpolate_parameters(expr::Symbol, p::AbstractVector)
+    str_expr = string(expr)
+    if startswith(str_expr, "p") && length(str_expr) > 1
+        # Extract the index number
+        index_str = str_expr[2:end]
+        try
+            index = parse(Int, index_str)
+            @assert 1 <= index <= length(p)
+            return p[index]
+        catch
+            return expr
+        end
+    end
+    return expr
+end
+
+_interpolate_parameters(expr, p::AbstractVector) = expr
