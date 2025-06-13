@@ -135,14 +135,15 @@ x_batch = rand(Float64, n_var, batch_size)
 
 exprs_cpu = build_typed_expressions(evaluator.backend)
 exev = ExprEvaluator(exprs_cpu, n_var, n_cons, backend=CPU(), batch_size=batch_size)
+cpu_backend = CPU()
 b = @benchmark begin
     evaluate_expressions_batch(
-        exprs_cpu,
-        x_batch,
-        σ_batch,
-        μ_batch,
-        backend=CPU(),
-        expr_evaluator=exev
+        $exprs_cpu,
+        $x_batch,
+        $σ_batch,
+        $μ_batch,
+        backend=$cpu_backend,
+        expr_evaluator=$exev
     )
 end samples=100
 
@@ -160,13 +161,13 @@ metal_exprs = build_typed_expressions(evaluator.backend, array_type=MtlVector, n
 exev = ExprEvaluator(metal_exprs, n_var, n_cons, backend=backend, batch_size=batch_size)
 bm = @benchmark begin
     evaluate_expressions_batch(
-        metal_exprs,
-        x_batch_metal,
-        σ_batch_metal,
-        μ_batch_metal,
-        backend=backend,
-        expr_evaluator=exev
-    ); KernelAbstractions.synchronize(backend)
+        $metal_exprs,
+        $x_batch_metal,
+        $σ_batch_metal,
+        $μ_batch_metal,
+        backend=$backend,
+        expr_evaluator=$exev
+    ); KernelAbstractions.synchronize($backend)
 end samples=10
 
 @info "Metal"
@@ -175,8 +176,8 @@ println("\n\n")
 
 grad = zeros(n_var, 1, batch_size)
 bmoi = @benchmark begin
-    for j in 1:batch_size
-        MOI.eval_objective_gradient(evaluator, @view(grad[:, :, j]), x_batch[:, j])
+    for j in 1:$batch_size
+        MOI.eval_objective_gradient($evaluator, @view($grad[:, :, j]), $x_batch[:, j])
     end
 end samples=100
 
@@ -186,7 +187,7 @@ println("\n\n")
 
 grad = zeros(n_var, 1, batch_size)
 bmoib = @benchmark begin
-    MOI.eval_objective_gradient.(Ref(evaluator), eachslice(grad, dims=3), eachslice(x_batch, dims=2))
+    MOI.eval_objective_gradient.(Ref($evaluator), eachslice($grad, dims=3), eachslice($x_batch, dims=2))
 end samples=100
 
 @info "MOI Broadcast"
