@@ -112,6 +112,7 @@ H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian
 @assert all(isapprox.(convert(Vector{Float32},vals.hessian_lagrangian[:, 2]),convert(Vector{Float32},H)))
 
 @info "Metal pass"
+println("\n\n")
 
 
 
@@ -120,15 +121,20 @@ H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian
 using BenchmarkTools
 
 
-batch_size = 640
-@info "Batch size: $batch_size"
+batch_size = 128
+n_var = length(evaluator.backend.x)
+n_cons = length(evaluator.backend.constraints)
 
-x_batch = rand(Float64, 2, batch_size)
+@info "Batch size: $batch_size\nNumber of variables: $n_var\nNumber of constraints: $n_cons"
+println("\n")
+
+
+x_batch = rand(Float64, n_var, batch_size)
 σ_batch = rand(Float64, batch_size)
-μ_batch = rand(Float64, length(evaluator.backend.constraints), batch_size)
+μ_batch = rand(Float64, n_cons, batch_size)
 
 exprs_cpu = build_typed_expressions(evaluator.backend)
-exev = ExprEvaluator(exprs_cpu, 2, 2, backend=CPU(), batch_size=batch_size)
+exev = ExprEvaluator(exprs_cpu, n_var, n_cons, backend=CPU(), batch_size=batch_size)
 b = @benchmark begin
     evaluate_expressions_batch(
         exprs_cpu,
@@ -138,11 +144,11 @@ b = @benchmark begin
         backend=CPU(),
         expr_evaluator=exev
     )
-end samples=10
+end samples=100
 
-println("-----------CPU-----------")
+@info "CPU"
 show(stdout, MIME("text/plain"), b)
-println("\n-------------------------")
+println("\n\n")
 
 
 backend = MetalBackend()
@@ -151,7 +157,7 @@ x_batch_metal = MtlMatrix{Float32}(x_batch)
 μ_batch_metal = MtlMatrix{Float32}(μ_batch)
 
 metal_exprs = build_typed_expressions(evaluator.backend, array_type=MtlVector, number_type=Float32)
-exev = ExprEvaluator(metal_exprs, 2, 2, backend=backend, batch_size=batch_size)
+exev = ExprEvaluator(metal_exprs, n_var, n_cons, backend=backend, batch_size=batch_size)
 bm = @benchmark begin
     evaluate_expressions_batch(
         metal_exprs,
@@ -161,31 +167,31 @@ bm = @benchmark begin
         backend=backend,
         expr_evaluator=exev
     ); KernelAbstractions.synchronize(backend)
-end samples=10 
+end samples=10
 
-println("----------Metal----------")
+@info "Metal"
 show(stdout, MIME("text/plain"), bm)
-println("\n-------------------------")
+println("\n\n")
 
-grad = zeros(2, 1, batch_size)
+grad = zeros(n_var, 1, batch_size)
 bmoi = @benchmark begin
     for j in 1:batch_size
         MOI.eval_objective_gradient(evaluator, @view(grad[:, :, j]), x_batch[:, j])
     end
-end samples=10
+end samples=100
 
-println("---------MOI Loop--------")
+@info "MOI Loop"
 show(stdout, MIME("text/plain"), bmoi)
-println("\n-------------------------")
+println("\n\n")
 
-grad = zeros(2, 1, batch_size)
+grad = zeros(n_var, 1, batch_size)
 bmoib = @benchmark begin
     MOI.eval_objective_gradient.(Ref(evaluator), eachslice(grad, dims=3), eachslice(x_batch, dims=2))
-end samples=10
+end samples=100
 
-println("------MOI Broadcast------")
+@info "MOI Broadcast"
 show(stdout, MIME("text/plain"), bmoib)
-println("\n-------------------------")
+println("\n\n")
 
 
 @info "Speedup over broadcasted MOI: $(median(bmoib).time / median(b).time)"
