@@ -3,27 +3,15 @@ import MathOptInterface.Nonlinear.SymbolicAD as SymbolicAD
 
 using RuntimeGeneratedFunctions
 RuntimeGeneratedFunctions.init(@__MODULE__)
+
 using KernelAbstractions
 const KA = KernelAbstractions
 
+include("kernel_utils.jl")
+include("expr_utils.jl")
 include("dag_to_expr.jl")
 include("evaluator_to_expr.jl")
 
-# Dedicated module for kernel evaluation to avoid name conflicts/age issues
-module KernelEvaluationModule
-    using KernelAbstractions
-end
-
-mutable struct CachingExpr
-    expr::Expr
-    fn
-    fn_set::Bool
-    kernel_module::Module
-end
-
-function Base.convert(::Type{CachingExpr}, expr::Expr)
-    return CachingExpr(expr, (x,p)->nothing, false, KernelEvaluationModule)
-end
 
 function build_typed_expressions(
     evaluator::SymbolicAD.Evaluator;
@@ -43,7 +31,7 @@ function build_typed_expressions(
     )
 end
 
-struct ExprEvaluator
+struct ExprEvaluator  # stores results
     expressions::EvaluatorExpressions
     objective
     objective_gradient
@@ -56,15 +44,15 @@ struct ExprEvaluator
 end
 # TODO: get n_vars and n_constraints from expressions
 function ExprEvaluator(expressions::EvaluatorExpressions, n_vars, n_constraints; backend=KA.CPU(), zeros=KA.zeros, batch_size=64)
-    number_type = eltype(expressions.objective_p)
+    T = eltype(expressions.objective_p)
     return ExprEvaluator(
         expressions,
-        zeros(backend, number_type, batch_size),
-        zeros(backend, number_type, n_vars, batch_size),
-        zeros(backend, number_type, n_constraints, batch_size),
-        zeros(backend, number_type, length(expressions.jacobian_structure), batch_size),
-        zeros(backend, number_type, length(expressions.hessian_structure), batch_size),
-        zeros(backend, number_type, length(expressions.hessian_structure), batch_size),
+        zeros(backend, T, batch_size),
+        zeros(backend, T, n_vars, batch_size),
+        zeros(backend, T, n_constraints, batch_size),
+        zeros(backend, T, length(expressions.jacobian_structure), batch_size),
+        zeros(backend, T, length(expressions.hessian_structure), batch_size),
+        zeros(backend, T, length(expressions.hessian_structure), batch_size),
         Vector{Tuple{Int,Int}}(undef, 0),
         Vector{Tuple{Int,Int}}(undef, 0)
     )
@@ -88,11 +76,11 @@ function evaluate_expressions_batch(
     expr_evaluator=nothing
 )
     # TODO: assert shapes are consistent
-    n_vars, n_points = size(x_batch)
-    n_constraints = length(expressions.constraints)
+    N, B = size(x_batch)
+    M = length(expressions.constraints)
 
-    # Pre-allocate working memory
-    _expr_evaluator = isnothing(expr_evaluator) ? ExprEvaluator(expressions, n_vars, n_constraints, backend=backend, batch_size=n_points) : expr_evaluator
+    # Pre-allocate working/results memory
+    _expr_evaluator = isnothing(expr_evaluator) ? ExprEvaluator(expressions, N, M, backend=backend, batch_size=B) : expr_evaluator
     objective = _expr_evaluator.objective
     objective_gradient = _expr_evaluator.objective_gradient
     constraints = _expr_evaluator.constraints
@@ -112,18 +100,18 @@ end
 
 
 """
-    _maybe_eval_batch(output, expr, x_batch, p, var_map, number_type, backend)
+    _maybe_eval_batch(output, expr, x_batch, p, var_map, T, BK)
 
 Evaluate expression over batch with variable remapping.
 
 !!! warning
     Uses `eval` and `invokelatest` in the GPU case.
 """
-function _maybe_eval_batch(output, expr::CachingExpr, x_batch::AbstractMatrix, p_batch, number_type, ::KA.CPU)
+function _maybe_eval_batch(output, expr::CachingExpr, x_batch::AbstractMatrix, p_batch, T, ::KA.CPU)
     func = if !(expr.fn_set)
-        # Remap expression variables
-        remapped_expr = _convert_constants(expr, number_type)
+        remapped_expr = _convert_constants(expr, T)
         wrapped_expr = _wrap_expr_for_evaluation(remapped_expr)
+        # TODO: above steps can happen earlier
         temp_func = @RuntimeGeneratedFunction(wrapped_expr)
         expr.fn = temp_func
         expr.fn_set = true
@@ -136,46 +124,29 @@ function _maybe_eval_batch(output, expr::CachingExpr, x_batch::AbstractMatrix, p
     return nothing
 end
 
-function _maybe_eval_batch(output, expr, x_batch::AbstractMatrix, p_batch, number_type, backend)
-    func = if !(expr isa CachingExpr && expr.fn_set)
-        # Remap expression variables
-        remapped_expr = _convert_constants(expr, number_type)
-
-        if KA.isgpu(backend)
-            kernel_expr = _wrap_expr_for_kernel(remapped_expr, gensym("_expr_kernel"))
-            # make kernel (compilation seems to be lazy)
-            expr.fn = Base.eval(KernelEvaluationModule, kernel_expr)
-            expr.fn_set = true
-
-            expr.fn
-        else
-            @assert expr isa CachingExpr
-            wrapped_expr = _wrap_expr_for_evaluation(remapped_expr)
-            temp_func = @RuntimeGeneratedFunction(wrapped_expr)
-            expr.fn = temp_func
-            expr.fn_set = true
-
-            expr.fn
-        end
-    else
-        expr.fn
+function _maybe_eval_batch(output, expr::CachingExpr, x_batch::AbstractMatrix, p_batch, T, BK)  # gpu-compatible version
+    @assert KA.isgpu(BK)
+    
+    if !(expr.fn_set)
+        remapped_expr = _convert_constants(expr, T)
+        kernel_expr = _wrap_expr_for_kernel(remapped_expr, gensym("_expr_kernel"))
+        expr.fn = Base.eval(KernelEvaluationModule, kernel_expr)
+        expr.fn_set = true
     end
-    if KA.isgpu(backend)
-        try
-            # TODO: all this invokelatest/module stuff is a mess
-            kernel_instance = Base.invokelatest(func, backend, 64)
-            Base.invokelatest(kernel_instance, output, x_batch, p_batch, ndrange=size(x_batch, 2))
-        finally
-            
-        end
-    else
-        @assert expr isa CachingExpr
-        _eval_batch_cpu(output, func, x_batch, p_batch)
+
+    func = expr.fn
+
+    try
+        # TODO: all this invokelatest/module stuff is a mess
+        kernel_instance = Base.invokelatest(func, BK, 64)
+        Base.invokelatest(kernel_instance, output, x_batch, p_batch, ndrange=size(x_batch, 2))
+    finally
+        # no synchronization here; user is responsible
     end
 
     return nothing
 end
-_maybe_eval_batch(output, ::Nothing, x_batch::AbstractMatrix, p_batch, number_type, backend) = nothing
+_maybe_eval_batch(output, ::Nothing, x_batch::AbstractMatrix, p_batch, T, BK) = nothing
 
 @generated function _eval_batch_cpu(output, func::F, x_batch, p_batch) where F
     quote
@@ -185,135 +156,117 @@ _maybe_eval_batch(output, ::Nothing, x_batch::AbstractMatrix, p_batch, number_ty
     end
 end
 
-function _wrap_expr_for_kernel(expr::Expr, name)
-    return :(@kernel $name(_o_,@Const(_x_),@Const(_p_))-> @inbounds begin
-        i = @index(Global)
-        x = @view(_x_[:, i])
-        p = _p_
-        _o_[i] = $expr
-    end; $name)
-end
-function _wrap_expr_for_evaluation(expr::Expr)
-    return :((x,p)-> @inbounds begin $expr end)
-end
-
-function _convert_constants(expr::CachingExpr, number_type)
-    return _convert_constants(expr.expr, number_type)
-end
-function _convert_constants(expr::Expr, number_type)
-    new_args = [_convert_constants(arg, number_type) for arg in expr.args]
-    return Expr(expr.head, new_args...)
-end
-_convert_constants(expr, ::Any) = expr
-_convert_constants(expr::Real, T) = T(expr)
-_convert_constants(expr::Integer, ::Any) = expr
-
-function _eval_expressions!(output, expressions::AbstractVector, parameter_arrays, x_batch::AbstractMatrix, number_type, backend::KA.CPU; shared_parameters=false)
-    n_exprs = length(expressions)
-    iszero(n_exprs) && (fill!(output, zero(eltype(x_batch))); return)
+function _eval_expressions!(output, exprs::AbstractVector, ps, X::AbstractMatrix, T, BK::KA.CPU; shared_parameters=false)
+    n_exprs = length(exprs)
+    iszero(n_exprs) && (fill!(output, zero(eltype(output))); return)
 
     ero = eachrow(output)
     if shared_parameters
         @inbounds for i in 1:n_exprs
-            _maybe_eval_batch(ero[i], expressions[i], x_batch, parameter_arrays[i], number_type, backend)
+            _maybe_eval_batch(ero[i], exprs[i], X, ps[i], T, BK)
         end
     else
         @inbounds for i in 1:n_exprs
-            _maybe_eval_batch(ero[i], expressions[i], x_batch, parameter_arrays[i], number_type, backend)
+            _maybe_eval_batch(ero[i], exprs[i], X, ps[i], T, BK)
         end
     end
 end
-function _eval_expressions!(output, expressions::AbstractVector, parameter_arrays, x_batch::AbstractMatrix, number_type, backend; shared_parameters=false)
-    n_exprs = length(expressions)
-    # iszero(n_exprs) && (fill!(output, zero(eltype(x_batch))); return)
-    iszero(n_exprs) && return
-    
-    for j in 1:n_exprs
-        _maybe_eval_batch(@view(output[j, :]), expressions[j], x_batch, shared_parameters ? parameter_arrays : parameter_arrays[j], number_type, backend)
+function _eval_expressions!(output, exprs::AbstractVector, ps, X::AbstractMatrix, T, BK; shared_parameters=false)
+    n_exprs = length(exprs)
+    iszero(n_exprs) && (fill!(output, zero(eltype(output))); return)
+    ero = eachrow(output)
+    if shared_parameters
+        @inbounds for j in 1:n_exprs
+            _maybe_eval_batch(ero[j], exprs[j], X, ps, T, BK)
+        end
+    else
+        for j in 1:n_exprs
+            _maybe_eval_batch(ero[j], exprs[j], X, ps[j], T, BK)
+        end
     end
 end
 
-function _eval_expressions!(output, expression::CachingExpr, parameter_array, x_batch::AbstractMatrix, number_type, backend; shared_parameters=false)
-    _maybe_eval_batch(output, expression, x_batch, parameter_array, number_type, backend)
+function _eval_expressions!(output, expr::CachingExpr, p, X::AbstractMatrix, T, BK; shared_parameters=false)
+    _maybe_eval_batch(output, expr, X, p, T, BK)
 end
 
-function _eval_expressions!(output, ::Nothing, ::Any, x_batch::AbstractMatrix, ::Any, ::Any; shared_parameters=false)
-    fill!(output, zero(eltype(x_batch)))
+function _eval_expressions!(output, ::Nothing, ::Any, ::Any, ::Any, ::Any; shared_parameters=false)
+    fill!(output, zero(eltype(output)))
 end
 
-function _eval_objective_batch!(output::AbstractVector, expressions::EvaluatorExpressions, x_batch::AbstractMatrix, number_type, backend)
-    _eval_expressions!(output, expressions.objective, expressions.objective_p, x_batch, number_type, backend)
+function _eval_objective_batch!(output::AbstractVector, evexprs::EvaluatorExpressions, X::AbstractMatrix, T, BK)
+    _eval_expressions!(output, evexprs.objective, evexprs.objective_p, X, T, BK)
 end
 
-function _eval_objective_gradient_batch!(output::AbstractMatrix, expressions::EvaluatorExpressions, x_batch::AbstractMatrix, number_type, backend)
-    _eval_expressions!(output, expressions.objective_gradient, expressions.objective_gradient_p, x_batch, number_type, backend, shared_parameters=true)
+function _eval_objective_gradient_batch!(output::AbstractMatrix, evexprs::EvaluatorExpressions, X::AbstractMatrix, T, BK)
+    _eval_expressions!(output, evexprs.objective_gradient, evexprs.objective_gradient_p, X, T, BK, shared_parameters=true)
 end
 
-function _eval_constraints_batch!(output::AbstractMatrix, expressions::EvaluatorExpressions, x_batch::AbstractMatrix, number_type, backend)
-    _eval_expressions!(output, expressions.constraints, expressions.constraint_p, x_batch, number_type, backend)
+function _eval_constraints_batch!(output::AbstractMatrix, evexprs::EvaluatorExpressions, X::AbstractMatrix, T, BK)
+    _eval_expressions!(output, evexprs.constraints, evexprs.constraint_p, X, T, BK)
 end
 
-function _eval_constraint_jacobian_batch!(output::AbstractMatrix, expressions::EvaluatorExpressions, x_batch::AbstractMatrix, number_type, backend)
-    @inbounds for k in 1:length(expressions.jacobian_structure)
-        _maybe_eval_batch(@view(output[k, :]), expressions.constraint_jacobian[k], x_batch, expressions.constraint_jacobian_p[k], number_type, backend)
+function _eval_constraint_jacobian_batch!(output::AbstractMatrix, evexprs::EvaluatorExpressions, X::AbstractMatrix, T, BK)
+    @inbounds for k in 1:length(evexprs.jacobian_structure)
+        _maybe_eval_batch(@view(output[k, :]), evexprs.constraint_jacobian[k], X, evexprs.constraint_jacobian_p[k], T, BK)
     end
 end
 
 function _eval_hessian_lagrangian_batch!(
     output::AbstractMatrix,
     temp_hessian_batch::AbstractMatrix,
-    expressions::EvaluatorExpressions,
-    x_batch::AbstractMatrix,
-    σ_batch::AbstractVector,
-    μ_batch::AbstractMatrix,
-    number_type,
-    backend
+    evexprs::EvaluatorExpressions,
+    X::AbstractMatrix,
+    σ::AbstractVector,
+    μ::AbstractMatrix,
+    T,
+    BK
 )
-    _eval_hessian_terms_batch!(temp_hessian_batch, expressions, x_batch, number_type, backend)
-    _apply_hessian_scaling_batch!(output, temp_hessian_batch, expressions, σ_batch, μ_batch, backend)
+    _eval_hessian_terms_batch!(temp_hessian_batch, evexprs, X, T, BK)
+    _apply_hessian_scaling_batch!(output, temp_hessian_batch, evexprs, σ, μ, BK)
 end
 
 function _eval_hessian_terms_batch!(
     output::AbstractMatrix,
-    expressions::EvaluatorExpressions,
-    x_batch::AbstractMatrix,
-    number_type,
-    backend::KA.CPU
+    evexprs::EvaluatorExpressions,
+    X::AbstractMatrix,
+    T,
+    BK::KA.CPU
 )
     ero = eachrow(output)
-    @inbounds for i in 1:length(expressions.hessian_lagrangian)
-        _maybe_eval_batch(ero[i], expressions.hessian_lagrangian[i], x_batch, expressions.hessian_lagrangian_p[i], number_type, backend)
+    @inbounds for i in 1:length(evexprs.hessian_lagrangian)
+        _maybe_eval_batch(ero[i], evexprs.hessian_lagrangian[i], X, evexprs.hessian_lagrangian_p[i], T, BK)
     end
 end
-function _eval_hessian_terms_batch!(
+function _eval_hessian_terms_batch!( # gpu-compatible version
     output::AbstractMatrix,
-    expressions::EvaluatorExpressions,
-    x_batch::AbstractMatrix,
-    number_type,
-    backend
+    evexprs::EvaluatorExpressions,
+    X::AbstractMatrix,
+    T,
+    BK
 )
-    for k in 1:length(expressions.hessian_lagrangian)
-        _maybe_eval_batch(@view(output[k, :]), expressions.hessian_lagrangian[k], x_batch, expressions.hessian_lagrangian_p[k], number_type, backend)
+    for k in 1:length(evexprs.hessian_lagrangian)
+        _maybe_eval_batch(@view(output[k, :]), evexprs.hessian_lagrangian[k], X, evexprs.hessian_lagrangian_p[k], T, BK)
     end
 end
 
 function _apply_hessian_scaling_batch!(
     output::AbstractMatrix,
     hessian_terms::AbstractMatrix,
-    expressions::EvaluatorExpressions,
-    σ_batch::AbstractVector,
-    μ_batch::AbstractMatrix,
+    evexprs::EvaluatorExpressions,
+    σ::AbstractVector,
+    μ::AbstractMatrix,
     ::KA.CPU
 )
     fill!(output, zero(eltype(output)))
     
     # Process objective hessian terms first
     obj_offset = 0
-    if !isnothing(expressions.objective)
-        obj_hess_count = length(expressions.objective_H_structure)
+    if !isnothing(evexprs.objective)
+        obj_hess_count = length(evexprs.objective_H_structure)
         @inbounds for k in 1:obj_hess_count
             for i in axes(output, 2)
-                output[k, i] = σ_batch[i] * hessian_terms[k, i]
+                output[k, i] = σ[i] * hessian_terms[k, i]
             end
         end
         obj_offset = obj_hess_count
@@ -321,44 +274,44 @@ function _apply_hessian_scaling_batch!(
     
     # Process constraint hessian terms
     constraint_offset = obj_offset
-    for constraint_idx in 1:length(expressions.constraints)
-        constraint_hess_count = length(expressions.constraint_H_structures[constraint_idx])
+    for constraint_idx in 1:length(evexprs.constraints)
+        constraint_hess_count = length(evexprs.constraint_H_structures[constraint_idx])
         @inbounds for k in 1:constraint_hess_count
             global_idx = constraint_offset + k
             for i in axes(output, 2)
-                output[global_idx, i] = μ_batch[constraint_idx, i] * hessian_terms[global_idx, i]
+                output[global_idx, i] = μ[constraint_idx, i] * hessian_terms[global_idx, i]
             end
         end
         constraint_offset += constraint_hess_count
     end
 end
-function _apply_hessian_scaling_batch!(
+function _apply_hessian_scaling_batch!( # gpu-compatible version
     output::AbstractMatrix,
     hessian_terms::AbstractMatrix,
-    expressions::EvaluatorExpressions,
-    σ_batch::AbstractVector,
-    μ_batch::AbstractMatrix,
-    backend
+    evexprs::EvaluatorExpressions,
+    σ::AbstractVector,
+    μ::AbstractMatrix,
+    BK
 )
     fill!(output, zero(eltype(output)))
     
     # Process objective hessian terms first
     obj_offset = 0
-    if !isnothing(expressions.objective)
-        obj_hess_count = length(expressions.objective_H_structure)
+    if !isnothing(evexprs.objective)
+        obj_hess_count = length(evexprs.objective_H_structure)
         for k in 1:obj_hess_count
-            output[k, :] = σ_batch .* hessian_terms[k, :]
+            output[k, :] = σ .* hessian_terms[k, :]
         end
         obj_offset = obj_hess_count
     end
     
     # Process constraint hessian terms
     constraint_offset = obj_offset
-    for constraint_idx in 1:length(expressions.constraints)
-        constraint_hess_count = length(expressions.constraint_H_structures[constraint_idx])
+    for constraint_idx in 1:length(evexprs.constraints)
+        constraint_hess_count = length(evexprs.constraint_H_structures[constraint_idx])
         for k in 1:constraint_hess_count
             global_idx = constraint_offset + k
-            output[global_idx, :] = μ_batch[constraint_idx, :] .* hessian_terms[global_idx, :]
+            output[global_idx, :] = μ[constraint_idx, :] .* hessian_terms[global_idx, :]
         end
         constraint_offset += constraint_hess_count
     end
