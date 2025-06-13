@@ -114,31 +114,32 @@ H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian
 
 
 using BenchmarkTools
-# Timing test with configurable batch size
-batch_size = 640
-@info "Running timing test with batch size: $batch_size"
 
-# Generate random batch data
+
+batch_size = 640
+# @info "Running timing test with batch size: $batch_size"
+
+# # Generate random batch data
 x_batch = rand(Float64, 2, batch_size)
 σ_batch = rand(Float64, batch_size)
 μ_batch = rand(Float64, length(evaluator.backend.constraints), batch_size)
 
-# CPU timing
-@info "CPU timing..."
+# # CPU timing
+# @info "CPU timing..."
 exprs_cpu = build_typed_expressions(
     evaluator.backend
 )
 exev = ExprEvaluator(exprs_cpu, 2, 2, backend=CPU(), batch_size=batch_size)
-for i in 1:10
-    evaluate_expressions_batch(
-        exprs_cpu,
-        x_batch,
-        σ_batch,
-        μ_batch,
-        backend=CPU(),
-        expr_evaluator=exev
-    )
-end
+# for i in 1:10
+#     evaluate_expressions_batch(
+#         exprs_cpu,
+#         x_batch,
+#         σ_batch,
+#         μ_batch,
+#         backend=CPU(),
+#         expr_evaluator=exev
+#     )
+# end
 b = @benchmark begin
     evaluate_expressions_batch(
         exprs_cpu,
@@ -148,7 +149,7 @@ b = @benchmark begin
         backend=CPU(),
         expr_evaluator=exev
     )
-end samples=100
+end samples=10
 
 @info "Metal timing..."
 metal_exprs = build_typed_expressions(
@@ -184,15 +185,15 @@ bm = @benchmark begin
         backend=backend,
         expr_evaluator=exev
     ); KernelAbstractions.synchronize(backend)
-end samples=100 
+end samples=10 
 
 grad = zeros(2, 1, batch_size)
 bmoi = @benchmark begin
     for j in 1:batch_size
         MOI.eval_objective_gradient(evaluator, @view(grad[:, :, j]), x_batch[:, j])
     end
-end samples=100
+end samples=10
 
 bmoib = @benchmark begin
     MOI.eval_objective_gradient.(Ref(evaluator), eachslice(grad, dims=3), eachslice(x_batch, dims=2))
-end samples=100
+end samples=10
