@@ -68,9 +68,7 @@ Returns NamedTuple with: `objective`, `objective_gradient`, `constraints`,
 """
 function evaluate_expressions_batch(
     expressions::EvaluatorExpressions,
-    x_batch::AbstractMatrix,
-    σ_batch::AbstractVector,
-    μ_batch::AbstractMatrix; # dual indexing?
+    x_batch::AbstractMatrix;
     backend=KA.CPU(),
     number_type=eltype(x_batch),
     expr_evaluator=nothing
@@ -85,17 +83,28 @@ function evaluate_expressions_batch(
     objective_gradient = _expr_evaluator.objective_gradient
     constraints = _expr_evaluator.constraints
     constraint_jacobian = _expr_evaluator.constraint_jacobian
-    hessian_lagrangian = _expr_evaluator.hessian_lagrangian
-    temp_hessian_batch = _expr_evaluator.temp_hessian_batch
 
     # Evaluate all components
     _eval_objective_batch!(objective, expressions, x_batch, number_type, backend)
     _eval_objective_gradient_batch!(objective_gradient, expressions, x_batch, number_type, backend)
     _eval_constraints_batch!(constraints, expressions, x_batch, number_type, backend)
     _eval_constraint_jacobian_batch!(constraint_jacobian, expressions, x_batch, number_type, backend)
-    _eval_hessian_lagrangian_batch!(hessian_lagrangian, temp_hessian_batch, expressions, x_batch, σ_batch, μ_batch, number_type, backend)
 
     return _expr_evaluator
+end
+
+function evaluate_expressions_batch(  # with hessian
+    expressions::EvaluatorExpressions,
+    x_batch::AbstractMatrix,
+    σ_batch::AbstractVector,
+    μ_batch::AbstractMatrix;
+    backend=KA.CPU(),
+    number_type=eltype(x_batch),
+    expr_evaluator=nothing
+)
+    ret = evaluate_expressions_batch(expressions, x_batch, backend=backend, number_type=number_type, expr_evaluator=expr_evaluator)
+    _eval_hessian_lagrangian_batch!(ret.hessian_lagrangian, ret.temp_hessian_batch, expressions, x_batch, σ_batch, μ_batch, number_type, backend)
+    return ret
 end
 
 

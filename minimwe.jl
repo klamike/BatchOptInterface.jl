@@ -47,15 +47,11 @@ x = filter(!is_parameter, all_variables(m))
 
 gradient_and_hessian(co::ConstraintRef) = gradient_and_hessian(constraint_object(co).func)
 gradient_and_hessian(co::AbstractJuMPScalar) = gradient_and_hessian(moi_function(co))
-gradient_and_hessian(co::MOI.AbstractScalarFunction) = MOINS.gradient_and_hessian(vi -> !is_parameter(VariableRef(m, vi)), co)
-batch_gradient_and_hessian(cos) = zip(gradient_and_hessian.(cos)...)
-_, moifn_o∇, oH, moifn_o∇² = gradient_and_hessian(obj)
-_, moifn_c∇s, cH, moifn_c∇²s = batch_gradient_and_hessian(rows)
-
-_drop_empty(vec) = filter(!isempty, vec)
-moifn_c∇s = _drop_empty(moifn_c∇s)
-cH = _drop_empty(cH)
-moifn_c∇²s = _drop_empty(moifn_c∇²s)
+gradient_and_hessian(co::MOI.AbstractScalarFunction) = MOINS.gradient_and_hessian(vi -> !is_parameter(VariableRef(m, vi)), co)[2:end]
+_drop_empty(vec) = eltype(vec) isa AbstractArray ? filter(!isempty, vec) : vec
+batch_gradient_and_hessian(cos) = _drop_empty(zip(gradient_and_hessian.(cos)...))
+moifn_o∇, oH, moifn_o∇² = gradient_and_hessian(obj)
+moifn_c∇s, cH, moifn_c∇²s = batch_gradient_and_hessian(rows)
 
 batch_parse_expression(expr) = MOIN.parse_expression.(Ref(nlp), expr)
 moiex_o∇ = batch_parse_expression(moifn_o∇)
@@ -63,22 +59,22 @@ moiex_o∇² = batch_parse_expression(moifn_o∇²)
 moiex_c∇s = batch_parse_expression.(moifn_c∇s)
 moiex_c∇²s = batch_parse_expression.(moifn_c∇²s)
 
-T = Float32
+T = Float64
 convert_to_expr(expr) = MOIN.convert_to_expr.(Ref(evaluator), expr, moi_output_format=true)
 ex_o∇ = convert_to_expr(moiex_o∇)
 ex_o∇² = convert_to_expr(moiex_o∇²)
 ex_c∇s = convert_to_expr.(moiex_c∇s) 
 ex_c∇²s = convert_to_expr.(moiex_c∇²s)
 
-convert_constants(expr::Expr, T) = Expr(expr.head, convert_constants.(expr.args, T)...)
-convert_constants(expr, ::Any) = expr
-convert_constants(expr::Real, T) = T(expr)
-convert_constants(expr::Integer, ::Any) = expr
-convert_constants(vex::Vector{Expr}, T) = convert_constants.(vex, T)
-ex_o∇ = convert_constants(ex_o∇, T)
-ex_o∇² = convert_constants(ex_o∇², T)
-ex_c∇s = convert_constants.(ex_c∇s, T)
-ex_c∇²s = convert_constants.(ex_c∇²s, T)
+convert_constants(expr) = expr
+convert_constants(expr::Real) = T(expr)
+convert_constants(expr::Integer) = expr
+convert_constants(expr::Expr) = Expr(expr.head, convert_constants.(expr.args)...)
+convert_constants(vex::Vector{Expr}) = convert_constants.(vex)
+ex_o∇ = convert_constants(ex_o∇)
+ex_o∇² = convert_constants(ex_o∇²)
+ex_c∇s = convert_constants.(ex_c∇s)
+ex_c∇²s = convert_constants.(ex_c∇²s)
 
 to_int_index(vex::Vector{Expr}) = _to_int_index.(vex)
 _to_int_index(expr) = expr
@@ -93,3 +89,165 @@ ex_o∇ = to_int_index(ex_o∇)
 ex_o∇² = to_int_index(ex_o∇²)
 ex_c∇s = to_int_index.(ex_c∇s)
 ex_c∇²s = to_int_index.(ex_c∇²s)
+
+
+# CPU: RGF + @generated loops
+#       (I think) this lets Julia compile the batch version of each function we generated
+# TODO: look into LoopVectorization.jl
+using RuntimeGeneratedFunctions, StaticArrays
+RuntimeGeneratedFunctions.init(@__MODULE__)
+make_function(expr::Expr) = @RuntimeGeneratedFunction(:(x -> @inbounds begin $expr end))
+make_function(vex::Vector{Expr}) = make_function.(vex)
+fn_o∇ = make_function(ex_o∇)
+fn_o∇² = make_function(ex_o∇²)
+fn_c∇s = make_function.(ex_c∇s)
+fn_c∇²s = make_function.(ex_c∇²s)
+
+@generated function _eval_function!(output::MMatrix{1,B,T}, func::F, X::SMatrix{N,B,T}) where {F,N,B,T}
+    quote
+        @assert size(output, 2) == size(X, 2)
+        @inbounds for (o, x) in zip(eachcol(output), eachcol(X))
+            o[] = func(x)
+        end
+        return nothing
+    end
+end
+function _eval_function!(output, func, X)
+    N, B = size(X)
+    T = eltype(X)
+    return _eval_function!(output, func, SMatrix{N,B,T}(X))
+end
+function eval_function!(output::MMatrix{1,B,T}, func::F, X::AbstractMatrix) where {F,B,T}
+    N = size(X, 1)
+    Xs = SMatrix{N,B,T}(X)
+    _eval_function!(output, func, Xs)
+    return nothing
+end
+
+@generated function _eval_function(func::F, X::SMatrix{N,B,T}) where {F,N,B,T}
+    quote
+        output = MMatrix{1,B,T}(zeros(T,1,B)) # FIXME: conversion API?
+        @inbounds for (o, x) in zip(eachcol(output), eachcol(X))
+            o[] = func(x)
+        end
+        return output
+    end
+end
+function eval_function(func::F, X::AbstractMatrix) where F
+    N,B = size(X)
+    T = eltype(X)
+    return _eval_function(func, SMatrix{N,B,T}(X))
+end
+
+batch_size = 64
+w = rand(rng, T, n_assets, batch_size)
+
+@time eval_function(fn_o∇[1], w)
+@time eval_function(fn_o∇[1], w)
+@time eval_function(fn_o∇[1], w)
+
+
+all_rgf = RuntimeGeneratedFunction[]
+for func in fn_o∇
+    push!(all_rgf, func)
+end
+for func in fn_o∇²
+    push!(all_rgf, func)
+end
+for c in fn_c∇s
+    for func in c
+        push!(all_rgf, func)
+    end
+end
+for c in fn_c∇²s
+    for func in c
+        push!(all_rgf, func)
+    end
+end
+
+@time eval_function.(all_rgf, Ref(w));
+
+
+using DynamicExpressions
+const DE = DynamicExpressions
+_DE_OPERATORS = OperatorEnum(
+    ( +, -, *, ^, /, ifelse, atan, min, max ), # binary operators
+    ( +, -, abs, sign,
+        sqrt, cbrt,
+        abs2, inv,
+        log, log10, log2, log1p,
+        exp, exp2, expm1,
+        sin, cos, tan,
+        sec, csc, cot,
+        sind, cosd, tand, secd, cscd, cotd,
+        asin, acos, atan, asec,
+    ) # unary operators
+)
+names(X::AbstractMatrix) = ["x$i" for i in 1:size(X, 1)]
+convert_index_to_name(expr::Expr) = begin
+    expr.head == :ref && return Symbol(string( expr.args[1]) * string(expr.args[2]))
+    return Expr(expr.head, convert_index_to_name.(expr.args)...)
+end
+convert_index_to_name(expr) = expr
+_eval_function(func::DE.Expression, X) = func(X)
+_eval_function!(output, func::DE.Expression, X) = begin
+    output .= func(X)
+    return nothing
+end
+to_de(expr) = DE.combine_operators(DE.parse_expression(convert_index_to_name(expr); operators=_DE_OPERATORS, variable_names=names(w)))
+to_de(vex::Vector{Expr}) = to_de.(vex)
+dex_o∇ = to_de(ex_o∇)
+dex_o∇² = to_de(ex_o∇²)
+dex_c∇s = to_de.(ex_c∇s)
+dex_c∇²s = to_de.(ex_c∇²s)
+
+all_de = DE.Expression[]
+for dex in dex_o∇
+    push!(all_de, dex)
+end
+for dex in dex_o∇²
+    push!(all_de, dex)
+end
+for c in dex_c∇s
+    for dex in c
+        push!(all_de, dex)
+    end
+end
+for c in dex_c∇²s
+    for dex in c
+        push!(all_de, dex)
+    end
+end
+
+using BenchmarkTools
+@info "MOINS"
+@assert evaluator.backend isa MOINS.Evaluator
+@benchmark begin
+    MOINS._evaluate!.(Ref($evaluator.backend), eachcol($w))
+end samples=100
+println("\n\n")
+
+@info "BOI RGF"
+@benchmark begin
+    eval_function.($all_rgf, Ref($w))
+end samples=100
+println("\n\n")
+
+@info "BOI DE"
+out = eval_function.(all_de, Ref(w));
+fill!(out, zero(eltype(out)));
+@benchmark begin
+    _eval_function.($all_de, Ref($w))
+end samples=100
+println("\n\n")
+
+include("eval_expr.jl")
+
+@info "BOI old"
+exprs = build_typed_expressions(evaluator.backend);
+n_var = length(evaluator.backend.x);
+n_cons = length(evaluator.backend.constraints);
+exev = ExprEvaluator(exprs, n_var, n_cons, backend=CPU(), batch_size=batch_size);
+@benchmark begin
+    evaluate_expressions_batch(exprs, $w, expr_evaluator=$exev)
+end samples=100
