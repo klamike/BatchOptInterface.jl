@@ -1,20 +1,83 @@
-using JuMP, Ipopt
-m = Model(Ipopt.Optimizer)
-set_silent(m)
-@variable m x
-@variable m y
-@constraint m c1 2x + sin(y) == 3
-@constraint m c2 3*x*y^4 + cos(x) == 0
-@objective m Max x^3 + sin(x*y)
+using JuMP, Ipopt, LinearAlgebra, Random
+
+function create_markowitz_problem(n_assets::Int; risk_aversion::Float64=1.0, seed::Int=42)
+    Random.seed!(seed)  # For reproducible results
+    
+    # Generate realistic market data
+    μ = 0.05 .+ 0.15 * rand(n_assets)  # Expected returns between 5% and 20%
+    
+    # Generate positive definite covariance matrix
+    A = randn(n_assets, n_assets)
+    Σ = (A' * A) / n_assets + 0.01 * I  # Scaled covariance matrix
+    
+    m = Model(Ipopt.Optimizer)
+    set_silent(m)
+    
+    @variable(m, 0.0 <= w[1:n_assets] <= 1.0)  # Portfolio weights with bounds
+    
+    # Budget constraint: weights sum to 1
+    @constraint(m, budget, sum(w) == 1)
+    
+    # Add some nonlinear constraints for complexity (transaction costs, etc.)
+    # Nonlinear transaction cost constraint
+    @constraint(m, transaction_cost, sum(w[i]^1.5 for i in 1:n_assets) <= 2.0)
+    
+    # Risk budget constraint (nonlinear)
+    @constraint(m, risk_budget, sum(w[i] * exp(0.1 * w[i]) for i in 1:n_assets) <= n_assets * 0.5)
+    
+    # Nonlinear objective: maximize utility with nonlinear risk penalty
+    # Utility = expected return - risk_aversion * (quadratic risk + nonlinear penalty)
+    portfolio_return = sum(μ[i] * w[i] for i in 1:n_assets)
+    quadratic_risk = sum(w[i] * Σ[i,j] * w[j] for i in 1:n_assets, j in 1:n_assets)
+    nonlinear_penalty = sum(w[i]^2 * log(1 + w[i]) for i in 1:n_assets)
+    
+    @objective(m, Max, portfolio_return - risk_aversion * (quadratic_risk + 0.1 * nonlinear_penalty))
+    
+    return m, μ, Σ
+end
+function create_nlp_model(model::JuMP.Model)
+    rows = Vector{ConstraintRef}(undef, 0)
+    nlp = MOI.Nonlinear.Model()
+    for (F, S) in list_of_constraint_types(model)
+        if F <: VariableRef && (S <: MOI.Parameter{Float64})
+            continue  # Skip variable bounds
+        end
+        for ci in all_constraints(model, F, S)
+            push!(rows, ci)
+            object = constraint_object(ci)
+            MOI.Nonlinear.add_constraint(nlp, object.func, object.set)
+        end
+    end
+    MOI.Nonlinear.set_objective(nlp, objective_function(model))
+    return nlp, rows
+end
+
+function create_evaluator(model::JuMP.Model; x=all_variables(model), mode=:symbolic)
+    nlp, rows = create_nlp_model(model)
+    backend = if mode == :reverse
+        MOI.Nonlinear.SparseReverseMode()
+    elseif mode == :symbolic
+        MOI.Nonlinear.SymbolicMode()
+    else
+        error("Unknown evaluator backend mode")
+    end
+    evaluator = MOI.Nonlinear.Evaluator(nlp, backend, vcat(index.(x)...))
+    MOI.initialize(evaluator, [:Grad, :Jac, :Hess])
+    return evaluator, rows, nlp
+end
+# Create the problem with configurable size
+n_assets = 10  # Change this to adjust problem size
+m, μ, Σ = create_markowitz_problem(n_assets, risk_aversion=2.0)
+
 optimize!(m)
-evaluator = MOI.Nonlinear.Evaluator(unsafe_backend(m).nlp_model, MOI.Nonlinear.SymbolicAD.Evaluator(unsafe_backend(m).nlp_model, index.(all_variables(m))))
-MOI.initialize(evaluator, [:Hess])
+evaluator = first(create_evaluator(m))
 
-
+@info "Created Markowitz problem with $n_assets assets"
+@info "Optimal portfolio weights: $(value.(m[:w]))"
+@info "Expected return: $(sum(μ[i] * value(m[:w][i]) for i in 1:n_assets))"
+@info "Portfolio risk: $(sqrt(sum(value(m[:w][i]) * Σ[i,j] * value(m[:w][j]) for i in 1:n_assets, j in 1:n_assets)))"
 
 include("eval_expr.jl")
-
-
 
 # cpu broadcasting batch
 exprs = build_typed_expressions(
@@ -52,14 +115,6 @@ H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian
 @assert all(isapprox.(vals.hessian_lagrangian[:, 2],H))
 
 @info "CPU pass"
-
-
-
-
-
-
-
-
 
 using Metal
 # metal kernel batch
@@ -114,12 +169,7 @@ H = zeros(length(MOI.hessian_lagrangian_structure(evaluator))); MOI.eval_hessian
 @info "Metal pass"
 println("\n\n")
 
-
-
-
-
 using BenchmarkTools
-
 
 batch_size = 128
 n_var = length(evaluator.backend.x)
@@ -127,7 +177,6 @@ n_cons = length(evaluator.backend.constraints)
 
 @info "Batch size: $batch_size\nNumber of variables: $n_var\nNumber of constraints: $n_cons"
 println("\n")
-
 
 x_batch = rand(Float64, n_var, batch_size)
 σ_batch = rand(Float64, batch_size)
@@ -150,7 +199,6 @@ end samples=100
 @info "CPU"
 show(stdout, MIME("text/plain"), b)
 println("\n\n")
-
 
 backend = MetalBackend()
 x_batch_metal = MtlMatrix{Float32}(x_batch)
@@ -193,6 +241,5 @@ end samples=100
 @info "MOI Broadcast"
 show(stdout, MIME("text/plain"), bmoib)
 println("\n\n")
-
 
 @info "Speedup over broadcasted MOI: $(median(bmoib).time / median(b).time)"

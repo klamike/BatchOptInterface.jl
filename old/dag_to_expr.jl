@@ -38,7 +38,7 @@ function dag_to_expressions(dag::SymbolicAD._DAG)
         end
     end
     
-    return [exprs[i] for i in dag.indices]
+    return [_to_expr(exprs[i])::Expr for i in dag.indices]
 end
 
 function _get_derivative_expr(op::Symbol, arg_expr)

@@ -180,7 +180,7 @@ function _eval_expressions!(output, exprs::AbstractVector, ps, X::AbstractMatrix
             _maybe_eval_batch(ero[j], exprs[j], X, ps, T, BK)
         end
     else
-        for j in 1:n_exprs
+        @inbounds for j in 1:n_exprs
             _maybe_eval_batch(ero[j], exprs[j], X, ps[j], T, BK)
         end
     end

@@ -38,15 +38,16 @@ m = Model(Ipopt.Optimizer);set_silent(m)
 portfolio_return = sum(μ[i] * w[i] for i in 1:n_assets)
 quadratic_risk = sum(w[i] * Σ[i,j] * w[j] for i in 1:n_assets, j in 1:n_assets)
 nonlinear_penalty = sum(w[i]^2 * log(1 + w[i]) for i in 1:n_assets)
-@objective(m, Max, portfolio_return - risk_aversion * (quadratic_risk + 0.1 * nonlinear_penalty))
+@objective(m, Max, tan(w[4]*w[5]^2) *portfolio_return - risk_aversion * (quadratic_risk + 0.1 * nonlinear_penalty))
 
 evaluator, rows, nlp = create_evaluator(m)
 
 obj = objective_function(m)
 x = filter(!is_parameter, all_variables(m))
 
-gradient_and_hessian(co::ConstraintRef) = gradient_and_hessian(constraint_object(co))
-gradient_and_hessian(co::AbstractConstraint) = MOINS.gradient_and_hessian(vi -> !is_parameter(VariableRef(m, vi)), moi_function(co))
+gradient_and_hessian(co::ConstraintRef) = gradient_and_hessian(constraint_object(co).func)
+gradient_and_hessian(co::AbstractJuMPScalar) = gradient_and_hessian(moi_function(co))
+gradient_and_hessian(co::MOI.AbstractScalarFunction) = MOINS.gradient_and_hessian(vi -> !is_parameter(VariableRef(m, vi)), co)
 batch_gradient_and_hessian(cos) = zip(gradient_and_hessian.(cos)...)
 _, moifn_o∇, oH, moifn_o∇² = gradient_and_hessian(obj)
 _, moifn_c∇s, cH, moifn_c∇²s = batch_gradient_and_hessian(rows)
@@ -69,11 +70,11 @@ ex_o∇² = convert_to_expr(moiex_o∇²)
 ex_c∇s = convert_to_expr.(moiex_c∇s) 
 ex_c∇²s = convert_to_expr.(moiex_c∇²s)
 
-convert_constants(expr::Expr, T) = Expr(expr.head, [_convert_constants(arg, T) for arg in expr.args]...)
+convert_constants(expr::Expr, T) = Expr(expr.head, convert_constants.(expr.args, T)...)
 convert_constants(expr, ::Any) = expr
 convert_constants(expr::Real, T) = T(expr)
 convert_constants(expr::Integer, ::Any) = expr
-convert_constants(vex::Vector{Expr}, T) = _convert_constants.(vex, T)
+convert_constants(vex::Vector{Expr}, T) = convert_constants.(vex, T)
 ex_o∇ = convert_constants(ex_o∇, T)
 ex_o∇² = convert_constants(ex_o∇², T)
 ex_c∇s = convert_constants.(ex_c∇s, T)

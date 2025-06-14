@@ -118,6 +118,7 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
         # Jacobian entries
         if length(dag_exprs) > 1
             for (j, xj) in enumerate(c.x)
+                println("adding $(j)th term: $(dag_exprs[1 + j])")
                 push!(jacobian_exprs, dag_exprs[1 + j])
                 push!(jacobian_p, copy(c.p))
                 push!(jacobian_structure, (i, xj))
