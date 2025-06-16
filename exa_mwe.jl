@@ -62,18 +62,6 @@ function MOIN.eval_univariate_function(operator::MOIN._UnivariateOperator, x::T)
     return ret  # removed cast to T
 end
 
-function MOIN.eval_univariate_gradient(operator::MOIN._UnivariateOperator, x::T) where {T<:ExaModels.AbstractNode}
-    ret = operator.f′(x)
-    MOIN.check_return_type(T, ret)
-    return ret  # removed cast to T
-end
-
-function MOIN.eval_univariate_hessian(operator::MOIN._UnivariateOperator, x::T) where {T<:ExaModels.AbstractNode}
-    ret = operator.f′′(x)
-    MOIN.check_return_type(T, ret)
-    return ret  # removed cast to T
-end
-
 function MOIN.eval_univariate_function(
     registry::MOIN.OperatorRegistry,
     id::Integer,
@@ -88,50 +76,18 @@ function MOIN.eval_univariate_function(
     return MOIN.eval_univariate_function(operator, x)
 end
 
-function MOIN.eval_univariate_gradient(
-    registry::MOIN.OperatorRegistry,
-    id::Integer,
-    x::T,
-) where {T<:ExaModels.AbstractNode}
-    if id <= registry.univariate_user_operator_start
-        _, f′ = MOIN._eval_univariate(id, x)
-        return f′  # removed cast to T
-    end
-    offset = id - registry.univariate_user_operator_start
-    operator = registry.registered_univariate_operators[offset]
-    return MOIN.eval_univariate_gradient(operator, x)
-end
-
-function MOIN.eval_univariate_hessian(
-    registry::MOIN.OperatorRegistry,
-    id::Integer,
-    x::T,
-) where {T<:ExaModels.AbstractNode}
-    if id <= registry.univariate_user_operator_start
-        ret = MOIN._eval_univariate_2nd_deriv(id, x)
-        if ret === nothing
-            op = registry.univariate_operators[id]
-            error("Hessian is not defined for operator $op")
-        end
-        return ret  # removed cast to T
-    end
-    offset = id - registry.univariate_user_operator_start
-    operator = registry.registered_univariate_operators[offset]
-    return MOIN.eval_univariate_hessian(operator, x)
-end
-
 function MOIN.eval_multivariate_function(
     registry::MOIN.OperatorRegistry,
     op::Symbol,
     x::AbstractVector{T},
 ) where {T<:Union{ExaModels.AbstractNode,Real}}  # removed cast to T
     if op == :+
-        return sum(x; init = 0.0)  # removed call to zero(T)
+        return sum(x; init = 0.0)  # FIXME: removed call to zero(T)
     elseif op == :-
         @assert length(x) == 2
         return x[1] - x[2]
     elseif op == :*
-        return prod(x; init = 1.0)  # removed call to one(T)
+        return prod(x; init = 1.0)  # FIXME: removed call to one(T)
     elseif op == :^
         @assert length(x) == 2
         # Use _nan_pow here to avoid throwing an error in common situations like
