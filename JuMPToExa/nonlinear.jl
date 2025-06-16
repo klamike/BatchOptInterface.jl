@@ -62,7 +62,7 @@ function MOIN_eval_univariate_function(
     registry::MOIN.OperatorRegistry,
     op::Symbol,
     x::T,
-) where {F<:Real,T}
+) where {F<:Real,T<:Union{ExaModels.AbstractNode,Real}}
     id = registry.univariate_operator_to_id[op]
     return MOIN_eval_univariate_function(f, registry, id, x)
 end
@@ -70,7 +70,7 @@ end
 function MOIN_eval_univariate_function(
     f::JuMPToExa{F},
     operator::MOIN._UnivariateOperator, x::T
-) where {F<:Real,T<:ExaModels.AbstractNode}
+) where {F<:Real,T<:Union{ExaModels.AbstractNode,Real}}
     ret = operator.f(x)
     # MOIN.check_return_type(T, ret)
     return _maybe_cast(f, ret)
@@ -81,7 +81,7 @@ function MOIN_eval_univariate_function(
     registry::MOIN.OperatorRegistry,
     id::Integer,
     x::T,
-) where {F<:Real,T<:ExaModels.AbstractNode}
+) where {F<:Real,T<:Union{ExaModels.AbstractNode,Real}}
     if id <= registry.univariate_user_operator_start
         v, _ = MOIN._eval_univariate(id, x)
         return _maybe_cast(f, v)
