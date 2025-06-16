@@ -1,9 +1,17 @@
 using Revise, JuMP, ExaModels
 const MOIN = MOI.Nonlinear
 
-function jump_evaluate_expr(
+float_type = Float32
+jump_to_exa(vr::VariableRef) = begin
+    source = JuMP.is_parameter(vr) ? ExaModels.ParSource() : ExaModels.VarSource()
+    return source[index(vr).value]
+end
+
+_maybe_cast(x::Real) = float_type(x)
+_maybe_cast(x::ExaModels.AbstractNode) = x
+function JuMP._evaluate_expr(
     registry::MOI.Nonlinear.OperatorRegistry,
-    f::Function,
+    f::typeof(jump_to_exa),
     expr::JuMP.GenericNonlinearExpr,
 )
     # The result_stack needs to be ::Real because operators like || return a
@@ -32,10 +40,12 @@ function jump_evaluate_expr(
                 first(udf)((pop!(result_stack) for _ in 1:nargs)...)
             elseif nargs == 1 && haskey(registry.univariate_operator_to_id, op)
                 x = pop!(result_stack)
-                MOI.Nonlinear.eval_univariate_function(registry, op, x)
+                MOIN.eval_univariate_function(registry, op, x)
             elseif haskey(registry.multivariate_operator_to_id, op)
-                args = Union{ExaModels.AbstractNode,Real}[pop!(result_stack) for _ in 1:nargs]  # removed cast to Real
-                MOI.Nonlinear.eval_multivariate_function(registry, op, args)
+                args = Union{ExaModels.AbstractNode,float_type}[
+                    _maybe_cast(pop!(result_stack)) for _ in 1:nargs  # added cast to float_type if not AbstractNode
+                ]
+                MOIN.eval_multivariate_function(registry, op, args)
             elseif haskey(registry.logic_operator_to_id, op)
                 @assert nargs == 2
                 x = pop!(result_stack)
@@ -54,6 +64,33 @@ function jump_evaluate_expr(
         end
     end
     return only(result_stack)
+end
+
+function JuMP.value(var_value::typeof(jump_to_exa), ex::GenericAffExpr{T,V}) where {T,V}
+    # S = Base.promote_op(var_value, V)
+    # U = Base.promote_op(*, T, S)
+    # ret = convert(U, ex.constant)
+    ret = ex.constant
+    for (var, coef) in ex.terms
+        ret += coef * var_value(var)
+    end
+    return ret
+end
+function JuMP.value(
+    var_value::typeof(jump_to_exa),
+    ex::GenericQuadExpr{CoefType,VarType},
+) where {CoefType,VarType}
+    # RetType = Base.promote_op(
+    #     (ctype, vtype) -> ctype * var_value(vtype) * var_value(vtype),
+    #     CoefType,
+    #     VarType,
+    # )
+    # ret = convert(RetType, value(var_value, ex.aff))
+    ret = value(var_value, ex.aff)
+    for (vars, coef) in ex.terms
+        ret += coef * var_value(vars.a) * var_value(vars.b)
+    end
+    return ret
 end
 
 function MOIN.eval_univariate_function(operator::MOIN._UnivariateOperator, x::T) where {T<:ExaModels.AbstractNode}
@@ -80,14 +117,14 @@ function MOIN.eval_multivariate_function(
     registry::MOIN.OperatorRegistry,
     op::Symbol,
     x::AbstractVector{T},
-) where {T<:Union{ExaModels.AbstractNode,Real}}  # removed cast to T
+) where {T<:Union{ExaModels.AbstractNode,float_type}}  # removed cast to T
     if op == :+
-        return sum(x; init = 0.0)  # FIXME: removed call to zero(T)
+        return sum(x; init = zero(float_type))
     elseif op == :-
         @assert length(x) == 2
         return x[1] - x[2]
     elseif op == :*
-        return prod(x; init = 1.0)  # FIXME: removed call to one(T)
+        return prod(x; init = one(float_type))
     elseif op == :^
         @assert length(x) == 2
         # Use _nan_pow here to avoid throwing an error in common situations like
@@ -121,11 +158,11 @@ m = Model()
 @variable m y
 @variable m p ∈ Parameter(1.0)
 
-exagraph = jump_evaluate_expr(
-    MOIN.OperatorRegistry(),
-    vr -> JuMP.is_parameter(vr) ? ExaModels.ParSource()[index(vr).value]
-                                : ExaModels.VarSource()[index(vr).value],
-    sin(p+x^4*y)
+exagraph = JuMP.value(
+    jump_to_exa,
+    # sin(x) + 4.0x*sqrt(y)*p^2 + log((x^3-y)^(-2.0f0))
+    # 2x
+    # *(x,y,p)
 )
 # ExaModels.Node1{
 #     typeof(sin),
