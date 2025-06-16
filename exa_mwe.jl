@@ -121,10 +121,26 @@ m = Model()
 @variable m y
 @variable m p ∈ Parameter(1.0)
 
-jump_evaluate_expr(
+exagraph = jump_evaluate_expr(
     MOIN.OperatorRegistry(),
-    vr -> JuMP.is_parameter(vr) ? ExaModels.Par(Float64)[-index(vr).value]  # use negative index to distinguish parameter from variable
-                                : ExaModels.Par(Float64)[ index(vr).value],
+    vr -> JuMP.is_parameter(vr) ? ExaModels.ParSource()[index(vr).value]
+                                : ExaModels.VarSource()[index(vr).value],
     sin(p+x^4*y)
 )
-# ExaModels.Node1{typeof(sin), ExaModels.Node2{typeof(+), ExaModels.ParIndexed{ExaModels.ParSource, -3}, ExaModels.Node2{typeof(*), ExaModels.Node2{typeof(^), ExaModels.ParIndexed{ExaModels.ParSource, 1}, Float64}, ExaModels.ParIndexed{ExaModels.ParSource, 2}}}}(ExaModels.Node2{typeof(+), ExaModels.ParIndexed{ExaModels.ParSource, -3}, ExaModels.Node2{typeof(*), ExaModels.Node2{typeof(^), ExaModels.ParIndexed{ExaModels.ParSource, 1}, Float64}, ExaModels.ParIndexed{ExaModels.ParSource, 2}}}(ExaModels.ParIndexed{ExaModels.ParSource, -3}(ExaModels.ParSource()), ExaModels.Node2{typeof(*), ExaModels.Node2{typeof(^), ExaModels.ParIndexed{ExaModels.ParSource, 1}, Float64}, ExaModels.ParIndexed{ExaModels.ParSource, 2}}(ExaModels.Node2{typeof(^), ExaModels.ParIndexed{ExaModels.ParSource, 1}, Float64}(ExaModels.ParIndexed{ExaModels.ParSource, 1}(ExaModels.ParSource()), 4.0), ExaModels.ParIndexed{ExaModels.ParSource, 2}(ExaModels.ParSource()))))
+# ExaModels.Node1{
+#     typeof(sin),
+#     ExaModels.Node2{
+#         typeof(+),
+#         ExaModels.ParIndexed{ExaModels.ParSource, 3},
+#         ExaModels.Node2{
+#             typeof(*),
+#             ExaModels.Node2{
+#                 typeof(^),
+#                 ExaModels.Var{Int64},
+#                 Float64
+#             },
+#             ExaModels.Var{Int64}
+#         }
+#     }
+# }
+fn = ExaModels._simdfunction(exagraph, 0, 0, 0)  # not sure how offsets work...
