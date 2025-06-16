@@ -3,8 +3,15 @@ const MOIN = MOI.Nonlinear
 
 float_type = Float32
 jump_to_exa(vr::VariableRef) = begin
-    source = JuMP.is_parameter(vr) ? ExaModels.ParSource() : ExaModels.VarSource()
-    return source[index(vr).value]
+    v, p = VariableRef[], VariableRef[]
+    for vp in all_variables(owner_model(vr))
+        JuMP.is_parameter(vp) ? push!(p, vp) : push!(v, vp)
+    end
+    is_param = JuMP.is_parameter(vr)
+    source = is_param ? ExaModels.ParSource() : ExaModels.VarSource()
+    pv = is_param ? p : v
+    idx = findfirst(==(vr), pv)
+    return source[idx]
 end
 
 _maybe_cast(x::Real) = float_type(x)
@@ -162,7 +169,7 @@ exagraph = JuMP.value(
     jump_to_exa,
     # sin(x) + 4.0x*sqrt(y)*p^2 + log((x^3-y)^(-2.0f0))
     # 2x
-    # *(x,y,p)
+    *(x,y,p)
 )
 # ExaModels.Node1{
 #     typeof(sin),
