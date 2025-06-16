@@ -1,7 +1,5 @@
 using Revise, JuMP, ExaModels
 const MOIN = MOI.Nonlinear
-Base.one(::Type{ExaModels.AbstractNode}) = 1.0
-Base.zero(::Type{ExaModels.AbstractNode}) = 0.0
 
 function jump_evaluate_expr(
     registry::MOI.Nonlinear.OperatorRegistry,
@@ -10,7 +8,7 @@ function jump_evaluate_expr(
 )
     # The result_stack needs to be ::Real because operators like || return a
     # ::Bool. Also, some inputs may be ::Int.
-    stack, result_stack = Any[expr], ExaModels.AbstractNode[]  # removed cast to Real
+    stack, result_stack = Any[expr], Any[]  # removed cast to Real
     while !isempty(stack)
         arg = pop!(stack)
         if arg isa GenericNonlinearExpr
@@ -36,7 +34,7 @@ function jump_evaluate_expr(
                 x = pop!(result_stack)
                 MOI.Nonlinear.eval_univariate_function(registry, op, x)
             elseif haskey(registry.multivariate_operator_to_id, op)
-                args = ExaModels.AbstractNode[pop!(result_stack) for _ in 1:nargs]  # removed cast to Real
+                args = Union{ExaModels.AbstractNode,Real}[pop!(result_stack) for _ in 1:nargs]  # removed cast to Real
                 MOI.Nonlinear.eval_multivariate_function(registry, op, args)
             elseif haskey(registry.logic_operator_to_id, op)
                 @assert nargs == 2
@@ -80,7 +78,7 @@ function MOIN.eval_univariate_function(
     registry::MOIN.OperatorRegistry,
     id::Integer,
     x::T,
-) where {T}
+) where {T<:ExaModels.AbstractNode}
     if id <= registry.univariate_user_operator_start
         f, _ = MOIN._eval_univariate(id, x)
         return f  # removed cast to T
@@ -94,7 +92,7 @@ function MOIN.eval_univariate_gradient(
     registry::MOIN.OperatorRegistry,
     id::Integer,
     x::T,
-) where {T}
+) where {T<:ExaModels.AbstractNode}
     if id <= registry.univariate_user_operator_start
         _, f′ = MOIN._eval_univariate(id, x)
         return f′  # removed cast to T
@@ -108,7 +106,7 @@ function MOIN.eval_univariate_hessian(
     registry::MOIN.OperatorRegistry,
     id::Integer,
     x::T,
-) where {T}
+) where {T<:ExaModels.AbstractNode}
     if id <= registry.univariate_user_operator_start
         ret = MOIN._eval_univariate_2nd_deriv(id, x)
         if ret === nothing
@@ -126,14 +124,14 @@ function MOIN.eval_multivariate_function(
     registry::MOIN.OperatorRegistry,
     op::Symbol,
     x::AbstractVector{T},
-) where {T}  # removed cast to T
+) where {T<:Union{ExaModels.AbstractNode,Real}}  # removed cast to T
     if op == :+
-        return sum(x; init = zero(T))
+        return sum(x; init = 0.0)  # removed call to zero(T)
     elseif op == :-
         @assert length(x) == 2
         return x[1] - x[2]
     elseif op == :*
-        return prod(x; init = one(T))
+        return prod(x; init = 1.0)  # removed call to one(T)
     elseif op == :^
         @assert length(x) == 2
         # Use _nan_pow here to avoid throwing an error in common situations like
@@ -167,7 +165,7 @@ m = Model()
 @variable m y
 @variable m p ∈ Parameter(1.0)
 
-JuMP._evaluate_expr(
+jump_evaluate_expr(
     MOIN.OperatorRegistry(),
     vr -> JuMP.is_parameter(vr) ? ExaModels.Par(Float64)[-index(vr).value] : ExaModels.Par(Float64)[index(vr).value],
     sin(p+x^4*y)
