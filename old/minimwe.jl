@@ -40,7 +40,7 @@ quadratic_risk = sum(w[i] * Σ[i,j] * w[j] for i in 1:n_assets, j in 1:n_assets)
 nonlinear_penalty = sum(w[i]^2 * log(1 + w[i]) for i in 1:n_assets)
 @objective(m, Max, tan(w[4]*w[5]^2) *portfolio_return - risk_aversion * (quadratic_risk + 0.1 * nonlinear_penalty))
 
-evaluator, rows, nlp = create_evaluator(m)
+evaluator, rows, nlp = create_evaluator(m, mode=MOIN.SymbolicMode())
 
 obj = objective_function(m)
 x = filter(!is_parameter, all_variables(m))
@@ -124,7 +124,7 @@ function eval_function!(output::MMatrix{1,B,T}, func::F, X::AbstractMatrix) wher
     return nothing
 end
 
-@generated function _eval_function(func::F, X::SMatrix{N,B,T}) where {F,N,B,T}
+@generated function _eval_function(func::RuntimeGeneratedFunction, X::SMatrix{N,B,T}) where {N,B,T}
     quote
         output = MMatrix{1,B,T}(zeros(T,1,B)) # FIXME: conversion API?
         @inbounds for (o, x) in zip(eachcol(output), eachcol(X))
@@ -172,16 +172,7 @@ using DynamicExpressions
 const DE = DynamicExpressions
 _DE_OPERATORS = OperatorEnum(
     ( +, -, *, ^, /, ifelse, atan, min, max ), # binary operators
-    ( +, -, abs, sign,
-        sqrt, cbrt,
-        abs2, inv,
-        log, log10, log2, log1p,
-        exp, exp2, expm1,
-        sin, cos, tan,
-        sec, csc, cot,
-        sind, cosd, tand, secd, cscd, cotd,
-        asin, acos, atan, asec,
-    ) # unary operators
+    ( +, -, abs, sign, sqrt, cbrt, abs2, inv, log, log10, log2, log1p, exp, exp2, expm1, sin, cos, tan, sec, csc, cot, sind, cosd, tand, secd, cscd, cotd, asin, acos, atan, asec ) # unary operators
 )
 names(X::AbstractMatrix) = ["x$i" for i in 1:size(X, 1)]
 convert_index_to_name(expr::Expr) = begin
@@ -241,7 +232,7 @@ fill!(out, zero(eltype(out)));
 end samples=100
 println("\n\n")
 
-include("eval_expr.jl")
+include("old/eval_expr.jl")
 
 @info "BOI old"
 exprs = build_typed_expressions(evaluator.backend);
@@ -251,3 +242,79 @@ exev = ExprEvaluator(exprs, n_var, n_cons, backend=CPU(), batch_size=batch_size)
 @benchmark begin
     evaluate_expressions_batch(exprs, $w, expr_evaluator=$exev)
 end samples=100
+
+# Correctness Tests
+@info "Running correctness tests..."
+
+# Test points for validation
+test_points = [
+    # rand(rng, T, n_assets),
+    # rand(rng, T, n_assets),
+    # rand(rng, T, n_assets)
+    rand(rng, T, n_assets) for _ in 1:batch_size
+]
+
+# Convert test points to batch format for BOI old
+test_batch = hcat(test_points...)  # n_assets x 3 matrix
+
+# Evaluate using BOI old
+exprs = build_typed_expressions(evaluator.backend);
+exev = ExprEvaluator(exprs, n_var, n_cons, backend=CPU(), batch_size=length(test_points));
+vals_boi = evaluate_expressions_batch(exprs, test_batch, expr_evaluator=exev)
+
+# Test objective gradient
+@info "Testing objective gradient correctness..."
+for (i, x_test) in enumerate(test_points)
+    # MOI reference
+    og_moi = zeros(T, n_assets)
+    MOI.eval_objective_gradient(evaluator, og_moi, x_test)
+    
+    # BOI old implementation
+    og_boi = vals_boi.objective_gradient[:, i]
+    
+    @assert all(isapprox.(og_boi, og_moi)) "BOI old objective gradient test $i failed"
+end
+
+# Test constraint evaluation
+@info "Testing constraint evaluation correctness..."
+for (i, x_test) in enumerate(test_points)
+    # MOI reference
+    c_moi = zeros(T, length(rows))
+    MOI.eval_constraint(evaluator, c_moi, x_test)
+    
+    # BOI old implementation
+    c_boi = vals_boi.constraints[:, i]
+    
+    @assert all(isapprox.(c_boi, c_moi, atol=1e-10)) "BOI old constraint evaluation test $i failed"
+end
+
+# Test constraint jacobian
+@info "Testing constraint jacobian correctness..."
+for (i, x_test) in enumerate(test_points)
+    # MOI reference
+    cg_moi = zeros(T, length(MOI.jacobian_structure(evaluator)))
+    MOI.eval_constraint_jacobian(evaluator, cg_moi, x_test)
+    
+    # BOI old implementation
+    cg_boi = vals_boi.constraint_jacobian[:, i]
+    
+    @assert all(isapprox.(cg_boi, cg_moi, atol=1e-10)) "BOI old constraint jacobian test $i failed"
+end
+
+# Test hessian lagrangian
+@info "Testing hessian lagrangian correctness..."
+σ_test = 1.0  # objective scaling
+μ_test = zeros(T, length(rows))  # constraint multipliers
+for (i, x_test) in enumerate(test_points)
+    # MOI reference
+    H_moi = zeros(T, length(MOI.hessian_lagrangian_structure(evaluator)))
+    MOI.eval_hessian_lagrangian(evaluator, H_moi, x_test, σ_test, μ_test)
+    
+    # BOI old implementation
+    H_boi = vals_boi.hessian_lagrangian[:, i]
+    
+    @assert all(isapprox.(H_boi, H_moi, atol=1e-10)) "BOI old hessian lagrangian test $i failed"
+end
+
+@info "All correctness tests passed! ✓"
+println()

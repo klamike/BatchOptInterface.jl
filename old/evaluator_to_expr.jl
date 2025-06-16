@@ -16,8 +16,6 @@ struct EvaluatorExpressions{E,CE,V,CV}
     hessian_lagrangian_p::CV
     hessian_structure::Vector{Tuple{Int,Int}}
 
-
-    variable_mapping::Dict{UInt64, Dict{Int,Int}}
     objective_H_structure::Vector{Tuple{Int,Int}}
     constraint_H_structures::Vector{Vector{Tuple{Int,Int}}}
     objective_hash::Union{Nothing, UInt64}
@@ -30,7 +28,6 @@ function EvaluatorExpressions(;
     constraints::CE, constraint_p::CV,
     constraint_jacobian::CE, constraint_jacobian_p::CV, jacobian_structure::Vector{Tuple{Int,Int}},
     hessian_lagrangian::CE, hessian_lagrangian_p::CV, hessian_structure::Vector{Tuple{Int,Int}},
-    variable_mapping::Dict{UInt64, Dict{Int,Int}},
     objective_H_structure::Vector{Tuple{Int,Int}} = Tuple{Int,Int}[],
     constraint_H_structures::Vector{Vector{Tuple{Int,Int}}} = Vector{Tuple{Int,Int}}[],
     objective_hash::Union{Nothing, UInt64} = nothing,
@@ -42,7 +39,6 @@ function EvaluatorExpressions(;
         constraints, constraint_p,
         constraint_jacobian, constraint_jacobian_p, jacobian_structure,
         hessian_lagrangian, hessian_lagrangian_p, hessian_structure,
-        variable_mapping,
         objective_H_structure, constraint_H_structures, objective_hash, constraint_hashes
     )
 end
@@ -54,9 +50,25 @@ function Base.convert(::Type{EvaluatorExpressions{E,CE,V,CV}}, ee::EvaluatorExpr
         ee.constraints, ee.constraint_p,
         ee.constraint_jacobian, ee.constraint_jacobian_p, ee.jacobian_structure,
         ee.hessian_lagrangian, ee.hessian_lagrangian_p, ee.hessian_structure,
-        ee.variable_mapping,
         ee.objective_H_structure, ee.constraint_H_structures, ee.objective_hash, ee.constraint_hashes
     )
+end
+
+function _remap_variables(expr::Expr, variable_map::Dict{Int,Int})
+    if expr.head == :ref && length(expr.args) == 2
+        var_name = expr.args[1]
+        index = expr.args[2]
+        if isa(index, Integer) && var_name == :x && haskey(variable_map, index)
+            return Expr(:ref, var_name, variable_map[index])
+        end
+    end
+    new_args = [_remap_variables(arg, variable_map) for arg in expr.args]
+    return Expr(expr.head, new_args...)
+end
+_remap_variables(expr, variable_map::Dict{Int,Int}) = expr
+
+function _remap_variables(exprs::Vector{Expr}, variable_map::Dict{Int,Int})
+    return [_remap_variables(expr, variable_map) for expr in exprs]
 end
 
 function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
@@ -72,7 +84,6 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
     hessian_exprs = Expr[]
     hessian_p = Vector{Vector{Float64}}()
     hessian_structure = Tuple{Int,Int}[]
-    variable_mapping = Dict{UInt64, Dict{Int,Int}}()
     
     # New fields for Hessian structure information
     objective_H_structure = Tuple{Int,Int}[]
@@ -85,44 +96,36 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
         o = evaluator.objective
         dag = evaluator.dag[o.hash]
         dag_exprs = dag_to_expressions(dag)
-        
-        variable_mapping[o.hash] = Dict(i => o.x[i] for i in eachindex(o.x))
-        objective_expr = dag_exprs[1]
+
+        variable_map = Dict(i => o.x[i] for i in eachindex(o.x))
+
+        objective_expr = _remap_variables(dag_exprs[1], variable_map)
         objective_p = copy(o.p)
         objective_hash = o.hash
         objective_H_structure = copy(evaluator.H[o.hash])
-        
-        if length(dag_exprs) > 1
-            objective_gradient_exprs = dag_exprs[2:(1 + length(o.x))]
-            objective_gradient_p = copy(o.p)
-        end
+        objective_gradient_exprs = _remap_variables(dag_exprs[2:(1 + length(o.x))], variable_map)
+        objective_gradient_p = copy(o.p)
     end
     
     # Extract constraints
     processed_hashes = Set{UInt64}()
     for (i, c) in enumerate(evaluator.constraints)
         dag = evaluator.dag[c.hash]
-        
-        if !(c.hash in processed_hashes)
-            push!(processed_hashes, c.hash)
-            variable_mapping[c.hash] = Dict(j => c.x[j] for j in eachindex(c.x))
-        end
+
+        variable_map = Dict(j => c.x[j] for j in eachindex(c.x))
         
         push!(constraint_hashes, c.hash)
         push!(constraint_H_structures, copy(evaluator.H[c.hash]))
         
         dag_exprs = dag_to_expressions(dag)
-        push!(constraint_exprs, dag_exprs[1])
+        push!(constraint_exprs, _remap_variables(dag_exprs[1], variable_map))
         push!(constraint_p, copy(c.p))
         
         # Jacobian entries
-        if length(dag_exprs) > 1
-            for (j, xj) in enumerate(c.x)
-                println("adding $(j)th term: $(dag_exprs[1 + j])")
-                push!(jacobian_exprs, dag_exprs[1 + j])
-                push!(jacobian_p, copy(c.p))
-                push!(jacobian_structure, (i, xj))
-            end
+        for (j, xj) in enumerate(c.x)
+            push!(jacobian_exprs, _remap_variables(dag_exprs[1 + j], variable_map))
+            push!(jacobian_p, copy(c.p))
+            push!(jacobian_structure, (i, xj))
         end
     end
     
@@ -132,11 +135,13 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
         dag = evaluator.dag[o.hash]
         dag_exprs = dag_to_expressions(dag)
         H_structure = evaluator.H[o.hash]
+
+        variable_map = Dict(i => o.x[i] for i in eachindex(o.x))
         
         hess_start = 2 + length(o.x)
         for (k, (hi, hj)) in enumerate(H_structure)
             if hess_start + k - 1 <= length(dag_exprs)
-                push!(hessian_exprs, dag_exprs[hess_start + k - 1])
+                push!(hessian_exprs, _remap_variables(dag_exprs[hess_start + k - 1], variable_map))
                 push!(hessian_p, copy(o.p))
                 push!(hessian_structure, (o.x[hi], o.x[hj]))
             end
@@ -148,11 +153,13 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
         dag = evaluator.dag[c.hash]
         dag_exprs = dag_to_expressions(dag)
         H_structure = evaluator.H[c.hash]
+
+        variable_map = Dict(j => c.x[j] for j in eachindex(c.x))
         
         hess_start = 2 + length(c.x)
         for (k, (hi, hj)) in enumerate(H_structure)
             if hess_start + k - 1 <= length(dag_exprs)
-                push!(hessian_exprs, dag_exprs[hess_start + k - 1])
+                push!(hessian_exprs, _remap_variables(dag_exprs[hess_start + k - 1], variable_map))
                 push!(hessian_p, copy(c.p))
                 push!(hessian_structure, (c.x[hi], c.x[hj]))
             end
@@ -172,7 +179,6 @@ function _evaluator_to_expressions(evaluator::SymbolicAD.Evaluator)
         hessian_lagrangian = hessian_exprs,
         hessian_lagrangian_p = hessian_p,
         hessian_structure = hessian_structure,
-        variable_mapping = variable_mapping,
         objective_H_structure = objective_H_structure,
         constraint_H_structures = constraint_H_structures,
         objective_hash = objective_hash,
