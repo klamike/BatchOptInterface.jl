@@ -31,7 +31,7 @@ function JuMP.value(f::JuMPToExa{F}, ex::GenericAffExpr{T,V}) where {F,T,V}
     # S = Base.promote_op(f, V)
     # U = Base.promote_op(*, T, S)
     # ret = convert(U, ex.constant)
-    ret = ex.constant
+    ret = _maybe_cast(f, ex.constant)
     for (var, coef) in ex.terms
         ret += _maybe_cast(f, coef) * f(var)
     end
@@ -47,7 +47,7 @@ function JuMP.value(
     #     VarType,
     # )
     # ret = convert(RetType, value(f, ex.aff))
-    ret = value(f, ex.aff)
+    ret = _maybe_cast(f, value(f, ex.aff))
     for (vars, coef) in ex.terms
         ret += _maybe_cast(f, coef) * f(vars.a) * f(vars.b)
     end
