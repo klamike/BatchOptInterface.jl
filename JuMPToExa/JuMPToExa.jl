@@ -3,11 +3,12 @@ const MOIN = MOI.Nonlinear
 
 
 struct JuMPToExa{T} <: Function
-    v::Vector{VariableRef}
-    p::Vector{VariableRef}
+    v::Vector{AbstractVariableRef}
+    p::Vector{AbstractVariableRef}
 
-    function JuMPToExa(model::Model, ::Type{T}=Float64) where {T<:Real}
-        v, p = VariableRef[], VariableRef[]
+    function JuMPToExa(model::GenericModel{TM}; T=nothing) where {TM}
+        T = isnothing(T) ? value_type(TM) : T
+        v, p = [], []
         for vp in all_variables(model)
             JuMP.is_parameter(vp) ? push!(p, vp) : push!(v, vp)
         end
@@ -20,38 +21,30 @@ function (jte::JuMPToExa)(vr::VariableRef)
     source = is_param ? ExaModels.ParSource() : ExaModels.VarSource()
     pv = is_param ? jte.p : jte.v
     idx = findfirst(==(vr), pv)
+    @assert !isnothing(idx)
     return source[idx]
 end
 
-_maybe_cast(::JuMPToExa{T}, x::Real) where {T<:Real} = T(x)
-_maybe_cast(::JuMPToExa{T}, x::T) where {T<:Real} = x
-_maybe_cast(::JuMPToExa, x::ExaModels.AbstractNode) = x
+_maybe_cast(::Type{T}, x::Real) where {T<:Real} = T(x)
+_maybe_cast(::Type{T}, x::T) where {T} = x
+_maybe_cast(::Any, x::ExaModels.AbstractNode) = x
 
 function JuMP.value(f::JuMPToExa{F}, ex::GenericAffExpr{T,V}) where {F,T,V}
-    # S = Base.promote_op(f, V)
-    # U = Base.promote_op(*, T, S)
-    # ret = convert(U, ex.constant)
-    ret = _maybe_cast(f, ex.constant)
+    ret = _maybe_cast(F, ex.constant)
     for (var, coef) in ex.terms
-        ret += _maybe_cast(f, coef) * f(var)
+        ret += _maybe_cast(F, coef) * f(var)
     end
-    return _maybe_cast(f, ret)
+    return _maybe_cast(F, ret)
 end
 function JuMP.value(
     f::JuMPToExa{F},
     ex::GenericQuadExpr{CoefType,VarType},
 ) where {F,CoefType,VarType}
-    # RetType = Base.promote_op(
-    #     (ctype, vtype) -> ctype * f(vtype) * f(vtype),
-    #     CoefType,
-    #     VarType,
-    # )
-    # ret = convert(RetType, value(f, ex.aff))
-    ret = _maybe_cast(f, value(f, ex.aff))
+    ret = _maybe_cast(F, value(f, ex.aff))
     for (vars, coef) in ex.terms
-        ret += _maybe_cast(f, coef) * f(vars.a) * f(vars.b)
+        ret += _maybe_cast(F, coef) * f(vars.a) * f(vars.b)
     end
-    return _maybe_cast(f, ret)
+    return _maybe_cast(F, ret)
 end
 
 include("nonlinear.jl")
