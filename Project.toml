@@ -3,3 +3,19 @@ uuid = "7145f916-0e30-4c9d-93a2-b32b6056125d"
 authors = ["Klamkin", "Michael <michael@klamkin.com> and contributors"]
 version = "1.0.0-DEV"
 
+[deps]
+ExaModels = "1037b233-b668-4ce9-9b63-f9f681f55dd2"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[compat]
+ExaModels = "0.8.3"
+
+[extras]
+AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"
+
+[targets]
+test = ["Test", "LinearAlgebra", "OpenCL", "pocl_jll", "AcceleratedKernels"]
