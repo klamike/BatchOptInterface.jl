@@ -3,7 +3,7 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://klamike.github.io/BatchNLPKernels.jl/dev/)
 [![Build Status](https://github.com/klamike/BatchNLPKernels.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/klamike/BatchNLPKernels.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
-`BatchNLPKernels.jl` provides [`KernelAbstractions.jl`](https://github.com/JuliaGPU/KernelAbstractions.jl) kernels for evaluating problem data from a (parametric) [`ExaModel`](https://github.com/exanauts/ExaModels.jl) for batches of solutions (and parameters). Currently the following functions are exported:
+`BatchNLPKernels.jl` provides [`KernelAbstractions.jl`](https://github.com/JuliaGPU/KernelAbstractions.jl) kernels for evaluating problem data from a (parametric) [`ExaModel`](https://github.com/exanauts/ExaModels.jl) for batches of solutions (and parameters). Currently the following functions (as well as their non-parametric variants) are exported:
 
 - `obj_batch!(::BatchModel, X, Θ)`
 - `grad_batch!(::BatchModel, X, Θ)`
