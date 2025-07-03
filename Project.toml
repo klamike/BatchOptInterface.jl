@@ -1,4 +1,4 @@
-name = "BatchOptInterface"
+name = "BatchNLPKernels"
 uuid = "7145f916-0e30-4c9d-93a2-b32b6056125d"
 authors = ["Klamkin", "Michael <michael@klamkin.com> and contributors"]
 version = "1.0.0-DEV"

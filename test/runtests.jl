@@ -1,4 +1,4 @@
-using BatchOptInterface
+using BatchNLPKernels
 using Test
 using ExaModels
 using KernelAbstractions

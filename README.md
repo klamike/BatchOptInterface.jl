@@ -1,1 +1,1 @@
-# BatchOptInterface.jl
+# BatchNLPKernels.jl

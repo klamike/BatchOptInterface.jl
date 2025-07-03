@@ -1,4 +1,4 @@
-module BatchOptInterface
+module BatchNLPKernels
 
 using ExaModels
 using KernelAbstractions
@@ -8,7 +8,7 @@ const KAExtension = ExaKA.KAExtension
 
 include("batch_model.jl")
 
-const BOI = BatchOptInterface
+const BOI = BatchNLPKernels
 export BOI, BatchModel, BatchModelConfig
 export obj_batch!, grad_batch!, cons_nln_batch!, jac_coord_batch!, hess_coord_batch!
 export jprod_nln_batch!, jtprod_nln_batch!, hprod_batch!
@@ -36,4 +36,4 @@ include("api/obj.jl")
 include("api/jprod.jl")
 include("api/hprod.jl")
 
-end # module BatchOptInterface
+end # module BatchNLPKernels
