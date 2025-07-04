@@ -41,6 +41,13 @@ Minimal configuration with only objective and constraint buffers.
 BatchModelConfig(::Val{:minimal}) = BatchModelConfig(obj=true, cons=true, grad=false, jac=false, hess=false, jprod=false, jtprod=false, hprod=false)
 
 """
+    BatchModelConfig(:gradients)
+
+Configuration to support obj, cons, and their gradients (grad, jtprod).
+"""
+BatchModelConfig(::Val{:gradients}) = BatchModelConfig(obj=true, cons=true, grad=true, jac=false, hess=false, jprod=false, jtprod=true, hprod=false)
+
+"""
     BatchModelConfig(:full)
 
 Full configuration with all buffers allocated.
