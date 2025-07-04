@@ -1,51 +1,11 @@
-function _obj_batch!(
-    bm::BatchModel,
-    objbuffers,
-    X::AbstractMatrix,
-    Θ::AbstractMatrix,
-)
-    batch_size = size(X, 2)
-    @lencheck batch_size eachcol(X) eachcol(Θ)
-    @lencheck bm.model.meta.nvar eachrow(X)
-    @lencheck length(bm.model.θ) eachrow(Θ)
-
-    _obj_batch(bm.model.ext.backend, objbuffers, bm.model.objs, X, Θ)
-    return vec(sum(objbuffers, dims=1))
-end
-
-function _obj_batch(backend, objbuffers, obj, X, Θ)
-    if !isempty(obj.itr)
-        batch_size = size(X, 2)
-        kerf_batch(backend)(objbuffers, obj.f, obj.itr, X, Θ; ndrange = (length(obj.itr), batch_size))
-    end
-    _obj_batch(backend, objbuffers, obj.inner, X, Θ)
-    synchronize(backend)
-end
-function _obj_batch(backend, objbuffers, f::ExaModels.ObjectiveNull, X, Θ) end
-
-
 """
     obj_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
 
 Evaluate objective function for a batch of points.
 """
 function obj_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @lencheck batch_size eachcol(X) eachcol(Θ)
-    @lencheck bm.model.meta.nvar eachrow(X)
-    @lencheck length(bm.model.θ) eachrow(Θ)
-
-    _check_buffer_available(bm.objbuffer, "objbuffer", "obj")
-    objbuffers = view(bm.objbuffer, :, 1:batch_size)
-    
-    if !isempty(objbuffers)
-        fill!(objbuffers, zero(eltype(objbuffers)))
-        results = _obj_batch!(bm, objbuffers, X, Θ)
-        return results
-    else
-        return zeros(eltype(bm.objbuffer), batch_size)
-    end
+    obj_work = _maybe_view(bm, :obj_work, X)
+    return obj_batch!(bm, obj_work, X, Θ)
 end
 
 
@@ -55,8 +15,33 @@ end
 Evaluate objective function for a batch of points.
 """
 function obj_batch!(bm::BatchModel, X::AbstractMatrix)
-    B = size(X, 2)
-    @assert B <= bm.batch_size "Input batch size ($B) exceeds model batch size ($(bm.batch_size))"
-    Θ = repeat(bm.model.θ, 1, B)  # FIXME: better way to do this?
+    Θ = _repeat_params(bm, X)
     return obj_batch!(bm, X, Θ)
 end
+
+function obj_batch!(
+    bm::BatchModel,
+    obj_work,
+    X::AbstractMatrix,
+    Θ::AbstractMatrix,
+)
+    batch_size = size(X, 2)
+    @lencheck batch_size eachcol(X) eachcol(Θ)
+    @lencheck bm.model.meta.nvar eachrow(X)
+    @lencheck length(bm.model.θ) eachrow(Θ)
+    _assert_batch_size(batch_size, bm.batch_size)
+    backend = _get_backend(bm.model)
+
+    _obj_batch(backend, obj_work, bm.model.objs, X, Θ)
+    return vec(sum(obj_work, dims=1))  # FIXME
+end
+
+function _obj_batch(backend, obj_work, obj, X, Θ)
+    if !isempty(obj.itr)
+        batch_size = size(X, 2)
+        kerf_batch(backend)(obj_work, obj.f, obj.itr, X, Θ; ndrange = (length(obj.itr), batch_size))
+    end
+    _obj_batch(backend, obj_work, obj.inner, X, Θ)
+    synchronize(backend)
+end
+function _obj_batch(backend, obj_work, f::ExaModels.ObjectiveNull, X, Θ) end

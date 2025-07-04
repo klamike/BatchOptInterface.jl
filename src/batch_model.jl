@@ -58,31 +58,31 @@ Allows efficient evaluation of multiple points simultaneously.
 ## Fields
 - `model::ExaModel`: The underlying ExaModel
 - `batch_size::Int`: Number of points to evaluate simultaneously
-- `objbuffer::Union{MT,Nothing}`: Batch objective values (nobj × batch_size)
-- `consbuffer::Union{MT,Nothing}`: Batch constraint values (nconaug × batch_size)
-- `consout::Union{MT,Nothing}`: Dense constraint output buffer (ncon × batch_size)
-- `gradbuffer::Union{MT,Nothing}`: Batch gradient values (nnzg × batch_size)
-- `gradout::Union{MT,Nothing}`: Dense gradient output buffer (nvar × batch_size)
-- `jacbuffer::Union{MT,Nothing}`: Batch jacobian values (nnzj × batch_size)
-- `hessbuffer::Union{MT,Nothing}`: Batch hessian values (nnzh × batch_size)
-- `jprod_buffer::Union{MT,Nothing}`: Batch jacobian-vector product buffer (ncon × batch_size)
-- `jtprod_buffer::Union{MT,Nothing}`: Batch jacobian transpose-vector product buffer (nvar × batch_size)
-- `hprod_buffer::Union{MT,Nothing}`: Batch hessian-vector product buffer (nvar × batch_size)
+- `obj_work::Union{MT,Nothing}`: Batch objective values (nobj × batch_size)
+- `cons_work::Union{MT,Nothing}`: Batch constraint values (nconaug × batch_size)
+- `cons_out::Union{MT,Nothing}`: Dense constraint output buffer (ncon × batch_size)
+- `grad_work::Union{MT,Nothing}`: Batch gradient values (nnzg × batch_size)
+- `grad_out::Union{MT,Nothing}`: Dense gradient output buffer (nvar × batch_size)
+- `jprod_work::Union{MT,Nothing}`: Batch jacobian values (nnzj × batch_size)
+- `hprod_work::Union{MT,Nothing}`: Batch hessian values (nnzh × batch_size)
+- `jprod_out::Union{MT,Nothing}`: Batch jacobian-vector product buffer (ncon × batch_size)
+- `jtprod_out::Union{MT,Nothing}`: Batch jacobian transpose-vector product buffer (nvar × batch_size)
+- `hprod_out::Union{MT,Nothing}`: Batch hessian-vector product buffer (nvar × batch_size)
 """
 struct BatchModel{MT,E}
     model::E
     batch_size::Int
 
-    objbuffer::Union{MT,Nothing}
-    consbuffer::Union{MT,Nothing}
-    consout::Union{MT,Nothing}
-    gradbuffer::Union{MT,Nothing}
-    gradout::Union{MT,Nothing}
-    jacbuffer::Union{MT,Nothing}
-    hessbuffer::Union{MT,Nothing}
-    jprod_buffer::Union{MT,Nothing}
-    jtprod_buffer::Union{MT,Nothing}
-    hprod_buffer::Union{MT,Nothing}
+    obj_work::Union{MT,Nothing}
+    cons_work::Union{MT,Nothing}
+    cons_out::Union{MT,Nothing}
+    grad_work::Union{MT,Nothing}
+    grad_out::Union{MT,Nothing}
+    jprod_work::Union{MT,Nothing}
+    hprod_work::Union{MT,Nothing}
+    jprod_out::Union{MT,Nothing}
+    jtprod_out::Union{MT,Nothing}
+    hprod_out::Union{MT,Nothing}
 end
 
 """
@@ -103,7 +103,7 @@ function BatchModel(model::ExaModels.ExaModel{T,VT,E,O,C}, batch_size::Int; conf
     nnzg = length(model.ext.gradbuffer) 
     nconaug = length(model.ext.conbuffer)
 
-    has_prodhelper = !isnothing(model.ext.prodhelper)
+    has_prodhelper = !isnothing(_get_prodhelper(model))
     if (config.jprod || config.jtprod || config.hprod) && !has_prodhelper
         error("Matrix-vector operations (jprod, jtprod, hprod) require ExaModel to be initialized with prod = true")
     end
@@ -115,44 +115,32 @@ function BatchModel(model::ExaModels.ExaModel{T,VT,E,O,C}, batch_size::Int; conf
     end
 
     o = model.ext.objbuffer
-    objbuffer = config.obj ? similar(o, nobj, batch_size) : nothing
-    consbuffer = config.cons ? similar(o, nconaug, batch_size) : nothing
-    consout = config.cons ? similar(o, ncon, batch_size) : nothing
-    gradbuffer = config.grad ? similar(o, nnzg, batch_size) : nothing
-    gradout = config.grad ? similar(o, nvar, batch_size) : nothing
-    jacbuffer = config.jac ? similar(o, nnzj, batch_size) : nothing
-    hessbuffer = config.hess ? similar(o, nnzh, batch_size) : nothing
+    obj_work = config.obj ? similar(o, nobj, batch_size) : nothing
+    cons_work = config.cons ? similar(o, nconaug, batch_size) : nothing
+    cons_out = config.cons ? similar(o, ncon, batch_size) : nothing
+    grad_work = config.grad ? similar(o, nnzg, batch_size) : nothing
+    grad_out = config.grad ? similar(o, nvar, batch_size) : nothing
+    jprod_work = config.jac ? similar(o, nnzj, batch_size) : nothing
+    hprod_work = config.hess ? similar(o, nnzh, batch_size) : nothing
     
-    jprod_buffer = config.jprod ? similar(o, ncon, batch_size) : nothing
-    jtprod_buffer = config.jtprod ? similar(o, nvar, batch_size) : nothing
-    hprod_buffer = config.hprod ? similar(o, nvar, batch_size) : nothing
+    jprod_out = config.jprod ? similar(o, ncon, batch_size) : nothing
+    jtprod_out = config.jtprod ? similar(o, nvar, batch_size) : nothing
+    hprod_out = config.hprod ? similar(o, nvar, batch_size) : nothing
     
     return BatchModel(
         model,
         batch_size,
-        objbuffer,
-        consbuffer,
-        consout,
-        gradbuffer,
-        gradout,
-        jacbuffer,
-        hessbuffer,
-        jprod_buffer,
-        jtprod_buffer,
-        hprod_buffer,
+        obj_work,
+        cons_work,
+        cons_out,
+        grad_work,
+        grad_out,
+        jprod_work,
+        hprod_work,
+        jprod_out,
+        jtprod_out,
+        hprod_out,
     )
-end
-
-# Convenience accessors
-Base.getproperty(bm::BatchModel, sym::Symbol) = 
-    sym in fieldnames(BatchModel) ? getfield(bm, sym) : getproperty(bm.model, sym)
-
-# Helper function to check buffer availability and provide informative errors
-function _check_buffer_available(buffer, buffer_name::String, config_field::String)
-    if isnothing(buffer)
-        throw(ArgumentError("$buffer_name is not available. Set $config_field = true in BatchModelConfig when creating BatchModel to enable."))
-    end
-    return buffer
 end
 
 function Base.show(io::IO, bm::BatchModel{T,VT}) where {T,VT}

@@ -1,9 +1,31 @@
-function _grad_batch!(backend, gradbuffers, objs, X, Θ)
-    sgradient_batch!(backend, gradbuffers, objs, X, Θ, one(eltype(gradbuffers)))
-    _grad_batch!(backend, gradbuffers, objs.inner, X, Θ)
+
+"""
+    grad_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
+
+Evaluate objective gradient for a batch of points.
+"""
+function grad_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
+    G = _maybe_view(bm, :grad_out, X)
+    grad_batch!(bm, X, Θ, G)
+    return G
+end
+
+"""
+    grad_batch!(bm::BatchModel, X::AbstractMatrix)
+
+Evaluate objective gradient for a batch of points.
+"""
+function grad_batch!(bm::BatchModel, X::AbstractMatrix)
+    Θ = _repeat_params(bm, X)
+    grad_batch!(bm, X, Θ)
+end
+
+function _grad_batch!(backend, grad_work, objs, X, Θ)
+    sgradient_batch!(backend, grad_work, objs, X, Θ, one(eltype(grad_work)))
+    _grad_batch!(backend, grad_work, objs.inner, X, Θ)
     synchronize(backend)
 end
-function _grad_batch!(backend, gradbuffers, objs::ExaModels.ObjectiveNull, X, Θ) end
+function _grad_batch!(backend, grad_work, objs::ExaModels.ObjectiveNull, X, Θ) end
 
 function sgradient_batch!(
     backend::B,
@@ -31,55 +53,29 @@ function grad_batch!(
     G::AbstractMatrix,
 )
     batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
     @lencheck batch_size eachcol(X) eachcol(Θ) eachcol(G)
     @lencheck bm.model.meta.nvar eachrow(X) eachrow(G)
     @lencheck length(bm.model.θ) eachrow(Θ)  # FIXME
+    _assert_batch_size(batch_size, bm.batch_size)
+    backend = _get_backend(bm.model)
     
-    _check_buffer_available(bm.gradbuffer, "gradbuffer", "grad")
-    gradbuffers = view(bm.gradbuffer, :, 1:batch_size)
+    grad_work = _maybe_view(bm, :grad_work, X)
     
-    if !isempty(gradbuffers)
-        fill!(gradbuffers, zero(eltype(gradbuffers)))
-        _grad_batch!(bm.model.ext.backend, gradbuffers, bm.model.objs, X, Θ)
+    if !isempty(grad_work)
+        fill!(grad_work, zero(eltype(grad_work)))
+
+        _grad_batch!(backend, grad_work, bm.model.objs, X, Θ)
         
         fill!(G, zero(eltype(G)))
-        batch_size = size(X, 2)
-        compress_to_dense_batch(bm.model.ext.backend)(
+        compress_to_dense_batch(backend)(
             G,
-            gradbuffers,
+            grad_work,
             bm.model.ext.gptr,
             bm.model.ext.gsparsity;
             ndrange = (length(bm.model.ext.gptr) - 1, batch_size),
         )
-        synchronize(bm.model.ext.backend)
+        synchronize(backend)
     end
     
     return G
-end
-
-"""
-    grad_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
-
-Evaluate objective gradient for a batch of points.
-"""
-function grad_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
-    B = size(X, 2)
-    @assert B <= bm.batch_size "Input batch size ($B) exceeds model batch size ($(bm.batch_size))"
-    _check_buffer_available(bm.gradout, "gradout", "grad")
-    G = view(bm.gradout, :, 1:B)
-    grad_batch!(bm, X, Θ, G)
-    return G
-end
-
-"""
-    grad_batch!(bm::BatchModel, X::AbstractMatrix)
-
-Evaluate objective gradient for a batch of points.
-"""
-function grad_batch!(bm::BatchModel, X::AbstractMatrix)
-    B = size(X, 2)
-    @assert B <= bm.batch_size "Input batch size ($B) exceeds model batch size ($(bm.batch_size))"
-    Θ = repeat(bm.model.θ, 1, B)  # FIXME: better way to do this?
-    return grad_batch!(bm, X, Θ)
 end

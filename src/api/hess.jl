@@ -1,8 +1,24 @@
 """
-    hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, Y::AbstractMatrix, H::AbstractMatrix; obj_weight=1.0)
+    hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
 
-Evaluate Hessian coordinates for a batch of points with different parameters.
+Evaluate Hessian coordinates for a batch of points.
 """
+function hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
+    H_view = _maybe_view(bm, :hprod_work, X)
+    hess_coord_batch!(bm, X, Θ, Y, H_view; obj_weight=obj_weight)
+    return H_view
+end
+
+"""
+    hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
+
+Evaluate Hessian coordinates for a batch of points.
+"""
+function hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
+    Θ = _repeat_params(bm, X)
+    hess_coord_batch!(bm, X, Θ, Y; obj_weight=obj_weight)
+end
+
 function hess_coord_batch!(
     bm::BatchModel,
     X::AbstractMatrix,
@@ -12,20 +28,17 @@ function hess_coord_batch!(
     obj_weight=1.0,
 )
     batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @assert size(Θ, 2) == batch_size "X and Θ must have the same number of columns (batch size)"
-    @assert size(Y, 2) == batch_size "Y must have the same number of columns as X and Θ"
-    @assert size(H, 2) == batch_size "H must have the same number of columns as X and Θ"
-    
     @lencheck batch_size eachcol(X) eachcol(Θ) eachcol(Y) eachcol(H)
     @lencheck bm.model.meta.nvar eachrow(X)
     @lencheck length(bm.model.θ) eachrow(Θ)
     @lencheck bm.model.meta.ncon eachrow(Y)
     @lencheck bm.model.meta.nnzh eachrow(H)
+    _assert_batch_size(batch_size, bm.batch_size)
+    backend = _get_backend(bm.model)
     
     fill!(H, zero(eltype(H)))
-    _obj_hess_coord_batch!(bm.model.ext.backend, H, bm.model.objs, X, Θ, obj_weight)
-    _con_hess_coord_batch!(bm.model.ext.backend, H, bm.model.cons, X, Θ, Y)
+    _obj_hess_coord_batch!(backend, H, bm.model.objs, X, Θ, obj_weight)
+    _con_hess_coord_batch!(backend, H, bm.model.cons, X, Θ, Y)
     return H
 end
 
@@ -73,49 +86,4 @@ function shessian_batch!(
         batch_size = size(X, 2)
         kerh2_batch(backend)(y1, y2, f.f, f.itr, X, Θ, adj, adj2; ndrange = (length(f.itr), batch_size))
     end
-end
-
-"""
-    hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
-
-Evaluate Hessian coordinates for a batch of points.
-"""
-function hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @lencheck batch_size eachcol(X) eachcol(Y)
-    @lencheck bm.model.meta.nvar eachrow(X)
-    @lencheck bm.model.meta.ncon eachrow(Y)
-    
-    # Use the underlying model's θ parameter for all evaluations
-    Θ = repeat(bm.model.θ, 1, batch_size)
-    _check_buffer_available(bm.hessbuffer, "hessbuffer", "hess")
-    H_view = view(bm.hessbuffer, :, 1:batch_size)
-    
-    # Call the batch evaluation function
-    hess_coord_batch!(bm, X, Θ, Y, H_view; obj_weight=obj_weight)
-    
-    return H_view
-end
-
-"""
-    hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
-
-Evaluate Hessian coordinates for a batch of points.
-"""
-function hess_coord_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, Y::AbstractMatrix; obj_weight=1.0)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @lencheck batch_size eachcol(X) eachcol(Θ) eachcol(Y)
-    @lencheck bm.model.meta.nvar eachrow(X)
-    @lencheck length(bm.model.θ) eachrow(Θ)
-    @lencheck bm.model.meta.ncon eachrow(Y)
-    
-    _check_buffer_available(bm.hessbuffer, "hessbuffer", "hess")
-    H_view = view(bm.hessbuffer, :, 1:batch_size)
-    
-    # Call the batch evaluation function
-    hess_coord_batch!(bm, X, Θ, Y, H_view; obj_weight=obj_weight)
-    
-    return H_view
 end

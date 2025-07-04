@@ -1,4 +1,26 @@
 """
+    jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
+
+Evaluate Jacobian-vector products for a batch of points.
+"""
+function jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
+    Jv = _maybe_view(bm, :jprod_out, X)
+    jprod_nln_batch!(bm, X, Θ, V, Jv)
+    return Jv
+end
+
+"""
+    jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
+
+Evaluate Jacobian-vector products for a batch of points.
+"""
+function jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
+    Θ = _repeat_params(bm, X)
+    jprod_nln_batch!(bm, X, Θ, V)
+end
+
+
+"""
     jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix, Jv::AbstractMatrix)
 
 Evaluate Jacobian-vector products for a batch of points.
@@ -11,62 +33,51 @@ function jprod_nln_batch!(
     Jv::AbstractMatrix,
 )
     batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @assert !isnothing(bm.jprod_buffer) "ExaModel was not created with prod=true. Matrix-vector products not supported."
-    @assert !isnothing(bm.model.ext.prodhelper) "ExaModel was not created with prod=true. Matrix-vector products not supported."
-    
     @lencheck batch_size eachcol(X) eachcol(Θ) eachcol(V) eachcol(Jv)
     @lencheck bm.model.meta.nvar eachrow(X) eachrow(V)
     @lencheck length(bm.model.θ) eachrow(Θ)
     @lencheck bm.model.meta.ncon eachrow(Jv)
-    
-    _check_buffer_available(bm.jacbuffer, "jacbuffer", "jac")
-    J_batch = view(bm.jacbuffer, :, 1:batch_size)
+    _assert_batch_size(batch_size, bm.batch_size)
+    ph = _get_prodhelper(bm.model)
+
+    J_batch = _maybe_view(bm, :jprod_work, X)
+
     jac_coord_batch!(bm, X, Θ, J_batch)
     
     fill!(Jv, zero(eltype(Jv)))
     kerspmv_batch(bm.model.ext.backend)(
         Jv,
         V,
-        bm.model.ext.prodhelper.jacsparsityi,
+        ph.jacsparsityi,
         J_batch,
-        bm.model.ext.prodhelper.jacptri;
-        ndrange = (length(bm.model.ext.prodhelper.jacptri) - 1, batch_size),
+        ph.jacptri;
+        ndrange = (length(ph.jacptri) - 1, batch_size),
     )
     synchronize(bm.model.ext.backend)
     
     return Jv
 end
 
-"""
-    jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
 
-Evaluate Jacobian-vector products for a batch of points.
 """
-function jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    
-    _check_buffer_available(bm.jprod_buffer, "jprod_buffer", "jprod")
-    Jv = view(bm.jprod_buffer, :, 1:batch_size)
-    Θ = repeat(bm.model.θ, 1, batch_size)
-    jprod_nln_batch!(bm, X, Θ, V, Jv)
-    return Jv
+    jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
+
+Evaluate Jacobian-transpose-vector products for a batch of points.
+"""
+function jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
+    Jtv = _maybe_view(bm, :jtprod_out, X)
+    jtprod_nln_batch!(bm, X, Θ, V, Jtv)
+    return Jtv
 end
 
 """
-    jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
+    jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
 
-Evaluate Jacobian-vector products for a batch of points.
+Evaluate Jacobian-transpose-vector products for a batch of points.
 """
-function jprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    
-    _check_buffer_available(bm.jprod_buffer, "jprod_buffer", "jprod")
-    Jv = view(bm.jprod_buffer, :, 1:batch_size)
-    jprod_nln_batch!(bm, X, Θ, V, Jv)
-    return Jv
+function jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
+    Θ = _repeat_params(bm, X)
+    jtprod_nln_batch!(bm, X, Θ, V)
 end
 
 """
@@ -82,60 +93,29 @@ function jtprod_nln_batch!(
     Jtv::AbstractMatrix,
 )
     batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    @assert !isnothing(bm.jtprod_buffer) "ExaModel was not created with prod=true. Matrix-vector products not supported."
-    @assert !isnothing(bm.model.ext.prodhelper) "ExaModel was not created with prod=true. Matrix-vector products not supported."
     
     @lencheck batch_size eachcol(X) eachcol(Θ) eachcol(V) eachcol(Jtv)
     @lencheck bm.model.meta.nvar eachrow(X) eachrow(Jtv)
     @lencheck length(bm.model.θ) eachrow(Θ)
     @lencheck bm.model.meta.ncon eachrow(V)
+    _assert_batch_size(batch_size, bm.batch_size)
+    backend = _get_backend(bm.model)
+    ph = _get_prodhelper(bm.model)
     
-    _check_buffer_available(bm.jacbuffer, "jacbuffer", "jac")
-    J_batch = view(bm.jacbuffer, :, 1:batch_size)
+    J_batch = _maybe_view(bm, :jprod_work, X)
+
     jac_coord_batch!(bm, X, Θ, J_batch)
     
     fill!(Jtv, zero(eltype(Jtv)))
-    kerspmv2_batch(bm.model.ext.backend)(
+    kerspmv2_batch(backend)(
         Jtv,
         V,
-        bm.model.ext.prodhelper.jacsparsityj,
+        ph.jacsparsityj,
         J_batch,
-        bm.model.ext.prodhelper.jacptrj;
-        ndrange = (length(bm.model.ext.prodhelper.jacptrj) - 1, batch_size),
+        ph.jacptrj;
+        ndrange = (length(ph.jacptrj) - 1, batch_size),
     )
-    synchronize(bm.model.ext.backend)
+    synchronize(backend)
     
     return Jtv
 end
-
-"""
-    jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
-
-Evaluate Jacobian-transpose-vector products for a batch of points.
-"""
-function jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, V::AbstractMatrix)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    
-    _check_buffer_available(bm.jtprod_buffer, "jtprod_buffer", "jtprod")
-    Jtv = view(bm.jtprod_buffer, :, 1:batch_size)
-    Θ = repeat(bm.model.θ, 1, batch_size)
-    jtprod_nln_batch!(bm, X, Θ, V, Jtv)
-    return Jtv
-end
-
-"""
-    jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
-
-Evaluate Jacobian-transpose-vector products for a batch of points.
-"""
-function jtprod_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix, V::AbstractMatrix)
-    batch_size = size(X, 2)
-    @assert batch_size <= bm.batch_size "Input batch size ($batch_size) exceeds model batch size ($(bm.batch_size))"
-    
-    _check_buffer_available(bm.jtprod_buffer, "jtprod_buffer", "jtprod")
-    Jtv = view(bm.jtprod_buffer, :, 1:batch_size)
-    jtprod_nln_batch!(bm, X, Θ, V, Jtv)
-    return Jtv
-end 
