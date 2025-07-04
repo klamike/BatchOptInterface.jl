@@ -7,6 +7,7 @@ function ChainRulesCore.rrule(::typeof(BatchNLPKernels.obj_batch!), bm::BatchMod
     y = BatchNLPKernels.obj_batch!(bm, X, Θ)
     
     function obj_batch_pullback(Ȳ)
+        Ȳ = ChainRulesCore.unthunk(Ȳ)
         gradients = BatchNLPKernels.grad_batch!(bm, X, Θ)
         
         X̄ = gradients .* Ȳ'
@@ -20,6 +21,7 @@ function ChainRulesCore.rrule(::typeof(BatchNLPKernels.obj_batch!), bm::BatchMod
     y = BatchNLPKernels.obj_batch!(bm, X)
     
     function obj_batch_pullback(Ȳ)
+        Ȳ = ChainRulesCore.unthunk(Ȳ)
         gradients = BatchNLPKernels.grad_batch!(bm, X)
 
         X̄ = gradients .* Ȳ'
@@ -35,6 +37,7 @@ function ChainRulesCore.rrule(::typeof(BatchNLPKernels.cons_nln_batch!), bm::Bat
     y = BatchNLPKernels.cons_nln_batch!(bm, X, Θ)
     
     function cons_nln_batch_pullback(Ȳ)
+        Ȳ = ChainRulesCore.unthunk(Ȳ)
         X̄ = BatchNLPKernels.jtprod_nln_batch!(bm, X, Θ, Ȳ)
         return ChainRulesCore.NoTangent(), ChainRulesCore.NoTangent(), X̄, ChainRulesCore.NoTangent()
     end
@@ -45,6 +48,7 @@ function ChainRulesCore.rrule(::typeof(BatchNLPKernels.cons_nln_batch!), bm::Bat
     y = BatchNLPKernels.cons_nln_batch!(bm, X)
     
     function cons_nln_batch_pullback(Ȳ)
+        Ȳ = ChainRulesCore.unthunk(Ȳ)
         X̄ = BatchNLPKernels.jtprod_nln_batch!(bm, X, Ȳ)
         return ChainRulesCore.NoTangent(), ChainRulesCore.NoTangent(), X̄
     end
