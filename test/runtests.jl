@@ -17,5 +17,6 @@ Base.findall(bitarray::CLArray) = Base.findall(identity, bitarray)
 
 
 include("luksan.jl")
+include("test_diff.jl")
 include("api.jl")
 include("config.jl")
