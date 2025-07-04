@@ -1,4 +1,3 @@
-
 """
     cons_nln_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
 

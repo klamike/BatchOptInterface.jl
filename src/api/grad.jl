@@ -1,4 +1,3 @@
-
 """
     grad_batch!(bm::BatchModel, X::AbstractMatrix, Θ::AbstractMatrix)
 
