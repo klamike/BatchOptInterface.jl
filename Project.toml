@@ -7,21 +7,30 @@ version = "1.0.0-DEV"
 ExaModels = "1037b233-b668-4ce9-9b63-f9f681f55dd2"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 
+[weakdeps]
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+
+[extensions]
+BNKChainRulesCore = "ChainRulesCore"
+BNKJuMP = "JuMP"
+
 [compat]
 ExaModels = "0.8.3"
 
-[extensions]
-BNKJuMP = "JuMP"
-
-[weakdeps]
-JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
-
 [extras]
-AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"
+AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
+DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
+FiniteDifferences = "26cc04aa-876d-5657-8c51-4c34ba976000"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "LinearAlgebra", "OpenCL", "pocl_jll", "AcceleratedKernels"]
+test = [
+    "Test", "LinearAlgebra",
+    "OpenCL", "pocl_jll", "AcceleratedKernels",
+    "DifferentiationInterface", "FiniteDifferences", "Zygote"
+]
