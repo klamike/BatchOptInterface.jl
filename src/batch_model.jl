@@ -65,31 +65,31 @@ Allows efficient evaluation of multiple points simultaneously.
 ## Fields
 - `model::ExaModel`: The underlying ExaModel
 - `batch_size::Int`: Number of points to evaluate simultaneously
-- `obj_work::Union{MT,Nothing}`: Batch objective values (nobj × batch_size)
-- `cons_work::Union{MT,Nothing}`: Batch constraint values (nconaug × batch_size)
-- `cons_out::Union{MT,Nothing}`: Dense constraint output buffer (ncon × batch_size)
-- `grad_work::Union{MT,Nothing}`: Batch gradient values (nnzg × batch_size)
-- `grad_out::Union{MT,Nothing}`: Dense gradient output buffer (nvar × batch_size)
-- `jprod_work::Union{MT,Nothing}`: Batch jacobian values (nnzj × batch_size)
-- `hprod_work::Union{MT,Nothing}`: Batch hessian values (nnzh × batch_size)
-- `jprod_out::Union{MT,Nothing}`: Batch jacobian-vector product buffer (ncon × batch_size)
-- `jtprod_out::Union{MT,Nothing}`: Batch jacobian transpose-vector product buffer (nvar × batch_size)
-- `hprod_out::Union{MT,Nothing}`: Batch hessian-vector product buffer (nvar × batch_size)
+- `obj_work::MT`: Batch objective values (nobj × batch_size), (0 × batch_size) if not allocated
+- `cons_work::MT`: Batch constraint values (nconaug × batch_size), (0 × batch_size) if not allocated
+- `cons_out::MT`: Dense constraint output buffer (ncon × batch_size), (0 × batch_size) if not allocated
+- `grad_work::MT`: Batch gradient values (nnzg × batch_size), (0 × batch_size) if not allocated
+- `grad_out::MT`: Dense gradient output buffer (nvar × batch_size), (0 × batch_size) if not allocated
+- `jprod_work::MT`: Batch jacobian values (nnzj × batch_size), (0 × batch_size) if not allocated
+- `hprod_work::MT`: Batch hessian values (nnzh × batch_size), (0 × batch_size) if not allocated
+- `jprod_out::MT`: Batch jacobian-vector product buffer (ncon × batch_size), (0 × batch_size) if not allocated
+- `jtprod_out::MT`: Batch jacobian transpose-vector product buffer (nvar × batch_size), (0 × batch_size) if not allocated
+- `hprod_out::MT`: Batch hessian-vector product buffer (nvar × batch_size), (0 × batch_size) if not allocated
 """
 struct BatchModel{MT,E}
     model::E
     batch_size::Int
 
-    obj_work::Union{MT,Nothing}
-    cons_work::Union{MT,Nothing}
-    cons_out::Union{MT,Nothing}
-    grad_work::Union{MT,Nothing}
-    grad_out::Union{MT,Nothing}
-    jprod_work::Union{MT,Nothing}
-    hprod_work::Union{MT,Nothing}
-    jprod_out::Union{MT,Nothing}
-    jtprod_out::Union{MT,Nothing}
-    hprod_out::Union{MT,Nothing}
+    obj_work::MT
+    cons_work::MT
+    cons_out::MT
+    grad_work::MT
+    grad_out::MT
+    jprod_work::MT
+    hprod_work::MT
+    jprod_out::MT
+    jtprod_out::MT
+    hprod_out::MT
 end
 
 """
@@ -122,17 +122,17 @@ function BatchModel(model::ExaModels.ExaModel{T,VT,E,O,C}, batch_size::Int; conf
     end
 
     o = model.ext.objbuffer
-    obj_work = config.obj ? similar(o, nobj, batch_size) : nothing
-    cons_work = config.cons ? similar(o, nconaug, batch_size) : nothing
-    cons_out = config.cons ? similar(o, ncon, batch_size) : nothing
-    grad_work = config.grad ? similar(o, nnzg, batch_size) : nothing
-    grad_out = config.grad ? similar(o, nvar, batch_size) : nothing
-    jprod_work = config.jac ? similar(o, nnzj, batch_size) : nothing
-    hprod_work = config.hess ? similar(o, nnzh, batch_size) : nothing
+    obj_work = config.obj ? similar(o, nobj, batch_size) : similar(o, 0, batch_size)
+    cons_work = config.cons ? similar(o, nconaug, batch_size) : similar(o, 0, batch_size)
+    cons_out = config.cons ? similar(o, ncon, batch_size) : similar(o, 0, batch_size)
+    grad_work = config.grad ? similar(o, nnzg, batch_size) : similar(o, 0, batch_size)
+    grad_out = config.grad ? similar(o, nvar, batch_size) : similar(o, 0, batch_size)
+    jprod_work = config.jac ? similar(o, nnzj, batch_size) : similar(o, 0, batch_size)
+    hprod_work = config.hess ? similar(o, nnzh, batch_size) : similar(o, 0, batch_size)
     
-    jprod_out = config.jprod ? similar(o, ncon, batch_size) : nothing
-    jtprod_out = config.jtprod ? similar(o, nvar, batch_size) : nothing
-    hprod_out = config.hprod ? similar(o, nvar, batch_size) : nothing
+    jprod_out = config.jprod ? similar(o, ncon, batch_size) : similar(o, 0, batch_size)
+    jtprod_out = config.jtprod ? similar(o, nvar, batch_size) : similar(o, 0, batch_size)
+    hprod_out = config.hprod ? similar(o, nvar, batch_size) : similar(o, 0, batch_size)
     
     return BatchModel(
         model,

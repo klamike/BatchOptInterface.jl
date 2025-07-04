@@ -35,7 +35,7 @@ _get_backend(bm::BatchModel) = _get_backend(bm.model)
 _get_backend(model::ExaModels.ExaModel) = model.ext.backend
 
 function _check_buffer_available(buffer, buffer_name::Symbol)
-    if isnothing(buffer)
+    if isempty(buffer)
         config_field_str = split(string(buffer_name), "_")[1]
         throw(ArgumentError("$buffer_name is not available. Set $config_field_str = true in BatchModelConfig when creating BatchModel to enable."))
     end
