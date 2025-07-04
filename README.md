@@ -38,4 +38,4 @@ where `X` and `Θ` are (device) matrices with dimensions `(nvar, batch_size)` an
 
 Note that the functions do operate in-place, on the buffers stored in the `BatchModel`. For convenience, they also return (view of) the relevant buffers.
 
-
+Additionally, `ChainRulesCore.rrule` are defined for `obj` and `cons_nln` using `grad` and `jtprod` respectively.
