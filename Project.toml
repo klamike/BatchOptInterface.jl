@@ -16,7 +16,7 @@ BatchOptInterfaceJuMPExt = "JuMP"
 BatchOptInterfacePOIExt = "ParametricOptInterface"
 
 [sources]
-FlexPOI = {path = "../FlexPOI.jl"}
+FlexPOI = {rev = "main", url = "git@github.com:klamike/FlexPOI.jl.git"}
 
 [compat]
 FlexPOI = "0.1"
